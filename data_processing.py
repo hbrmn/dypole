@@ -39,7 +39,7 @@ from cycler import cycler
 import palettable
 #from matplotlib.widgets import Slider, Button, RadioButtons
 
-def process(data_path, proc_par, bgc_par, debug):
+def process(data_path, proc_par, bgc_par, file_name, export, debug):
     """Returns frequency and ppm scales of input dataset as well as the data
     array, data dictionary and transmitter offset value (SFO) in points
 
@@ -65,6 +65,7 @@ def process(data_path, proc_par, bgc_par, debug):
                                 and what is noise from data \n
         'function': 'ah'        # Cost function -for now only takes asymmetric
                                 huber function 'ah'. \n
+    export : 1                  # 1 enabled, else disables\n
     debug : integer
        Can be either 0 or 1 while the latter shows the (first) spectrum of
        the (possibly 2D) Dataset
@@ -165,6 +166,15 @@ def process(data_path, proc_par, bgc_par, debug):
         if bgc_par['enabled'] == 1:
             spec = (spec - bgc(ppm, spec, bgc_par['order'],
                                bgc_par['threshold'], bgc_par['function'])[0])
+        if export == 1: #Exporting REDOR points and Besselfunction to .csv files
+            spec = spec/np.max(spec)
+            export_var = zip(freq, spec)
+            with open('output/' + file_name +'_hz.dat', 'w') as f:
+                writer = csv.writer(f, delimiter='\t', lineterminator='\n')
+                writer.writerow(('ti: ', file_name))
+                writer.writerow(('##freq ', str(np.round(carrier_frequency, decimals=5))))
+                for word in export_var:
+                    writer.writerows([word])
     if debug == 1:
         # Using times font causes some unexplainable bug on my machine
         # so it is here substituted with serif
@@ -683,10 +693,3 @@ plt.rc('xtick', labelsize=10)
 plt.rc('ytick', labelsize=10)
 plt.rc('font', **{'family':'serif', 'serif':['Times']})
 
-
-def bessel_p25(xaxis):
-    ss.jv(0.25,xaxis)
-def bessel_m25(xaxis):
-    ss.jv(-0.25,xaxis)
-xaxis = np.linspace(1,1,100)
-plt.plot(xaxis, bessel_p25(xaxis), color='k')

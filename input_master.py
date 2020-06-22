@@ -27,14 +27,14 @@ import data_processing as dp
 ##### Script Inputs and processing parameters
 # dataPath = r"/home/rm7c8/ownCloud/data/NMR Data Bruker/300MHz MS/nmr/ALW6/26/pdata/1"
 # Path to raw data
-data_path = r"C:\Users\edwu5ea1\Documents\sciebo\data\NMR Data Varian\Gustavo\NaPO3-BaPO32-NaF-BaF2\23Na\35\300518-23Na-35-REDOR.fid"
+data_path = r"E:\DL\NMR_data_Henrik\Hssen_0Bi\2\pdata\1"
 # data_path = r"C:\Users\edwu5ea1\Documents\sciebo\data\NMR Data Bruker\300MHz MS\nmr\ALW6\25\pdata\1"
-file_name = 'Test'   # Output file name
+file_name = 'PFG_y0'   # Output file name
 debug = 1   # debug = 1 to show all spectra and integration limits, debug = 2 to display REDOR curve and fit
 export = 1   # export = 1 to export redor curve and fits
 
 # procPar: Parameters for data processing.
-proc_par = {'vendor' : 'varian',     # 'bruker' or 'varian'
+proc_par = {'vendor' : 'bruker',     # 'bruker' or 'varian'
             'ini_zero_order':0,      # Initial phase value for zero-order phasing
             'ini_first_order':-100.0,   # Initial phase value for first-order phasing
             'first_order':00,        # first order phase correction value
@@ -57,7 +57,7 @@ integ_par = {'lowerIntegLimit':36,
             'experiment':'RESPDOR'}     # Choose between 'REDOR', 'RESPDOR, or 'SED'
 
 # evalPar: Parameters for analyzing the dephasing curves.
-eval_par  = {'vendor' : 'varian',    # 'bruker' or 'varian'
+eval_par  = {'vendor' : 'bruker',    # 'bruker' or 'varian'
             'lim_par_fit': 0.2,      # Y-axis limit for parabola fit
             'limit_bes_fit': 0,      # REDOR points to be omitted from fit (counting backwards)
             'quant_number': 5/2,     # Spin quantum number of non-observed nucleus
@@ -69,8 +69,8 @@ eval_par  = {'vendor' : 'varian',    # 'bruker' or 'varian'
 
 ##### Calling scripts
 ##### Loading and processing 2D file and its parameters
-[freq,ppm,spec,dic,sfo_point] = dp.process(data_path, proc_par, bgc_par, debug)
-data = {'dictionary':dic, 'ppm_scale':ppm, 'freq_scale':freq,'spectra':spec, 'sfo_point':sfo_point}
+[freq,ppm,spec,dic,sfo_point] = dp.process(data_path, proc_par, bgc_par, file_name, export, debug)
+# data = {'dictionary':dic, 'ppm_scale':ppm, 'freq_scale':freq,'spectra':spec, 'sfo_point':sfo_point}
 ##### Integrates S and S0 spectra and puts it in an array
 # area = dp.integration(data, integ_par, bgc_par, debug)
 # data['area'] = area
