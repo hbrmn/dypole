@@ -5,3 +5,4 @@
 1. Create a UI for the master_input file or alternatively include data_processing it into the GUI of ssNake.
 1. Put figure options and plotting into a function to call as needed
 1. Create classes to optimize code
+1. Make Inputscript return file with all used parameters for processing, that can be loaded to restore the session later.
