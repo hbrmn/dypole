@@ -39,6 +39,7 @@ from cycler import cycler
 import palettable
 #from matplotlib.widgets import Slider, Button, RadioButtons
 
+
 def process(data_path, proc_par, bgc_par, file_name, export, debug):
     """Returns frequency and ppm scales of input dataset as well as the data
     array, data dictionary and transmitter offset value (SFO) in points
@@ -83,29 +84,40 @@ def process(data_path, proc_par, bgc_par, file_name, export, debug):
     """
     # Loads the possibly two dimensional dataset
     if proc_par['vendor'] == 'bruker':
+        
         dic, rawdata = ng.bruker.read(data_path)
+        
         carrier_frequency = dic['acqus']['SFO1']  # Transmitter frequency
         # rel_car_freq = (carrier_frequency-dic['acqus']['BF1'])*1e6
+        
         spectral_width = dic['acqus']['SW_h'] # spectral width
         # Relative transmitter offset to BF1: i.e. SFO1 - BF1
+        
         const_o1 = dic['acqus']['O1']
         # TOPSPIN SR value. Spectrometer reference value: i.e. SF - BF1
+        
         const_spec_ref = (dic['procs']['SF']-dic['acqus']['BF1'])*1e6
         # Calculates transmitter offset frequency relative to referenced 0 Hz/ppm
+        
         rel_offset_frequency = const_o1 - const_spec_ref
         # Checks dimensionality
+        
         if 'acqu2s' in dic:
             # checks if rawdata is of right shape. If not, manually create the
             # rawdata array and use the TD parameter of acqu2s
             # (actual number of recorded indirect points) to create dataset
+            
             if len(rawdata) != dic['acqu2s']['TD']:
                 # guess what real array shape should look like
-                aux = ng.bruker.guess_shape(dic)
+                # Needs fixing, because it is not reliable
+                # aux = ng.bruker.guess_shape(dic)
+                aux = np.array([dic['acqu2s']['TD'],dic['acqus']['TD']])
                 # reshaping rawdata accordingly. Missing experiments will be zeros
                 rawdata = (
                     np.reshape(rawdata,
-                               (int((aux[0][1]+aux[0][0])*2),
-                                int(aux[0][2]/2)))[0:dic['acqu2s']['TD'], :])
+                               (int((aux[0])),
+                                int(aux[1]/2)))[0:dic['acqu2s']['TD'], :])
+                
         if dic['acqus']['DIGMOD'] != 0:
             # Removes the ominous group delay artifact when recording digitally
             data = ng.bruker.remove_digital_filter(dic, rawdata)
@@ -127,6 +139,7 @@ def process(data_path, proc_par, bgc_par, file_name, export, debug):
     if data.ndim == 1:
         data = data[proc_par['number_shift_points']:]
     else:
+        data = np.array(data[0][:,:])
         data = data[:, proc_par['number_shift_points']:]
     # zero-filling to a value 2^n
     data = (ng.proc_base.zf(
@@ -138,7 +151,7 @@ def process(data_path, proc_par, bgc_par, file_name, export, debug):
     if data.ndim == 1:
         data[trim:] = np.zeros(len(data[trim:]))
     else:
-        data[:, trim:] = np.zeros(len(data[0, trim:]))
+        data[ :, trim:] = np.zeros(len(data[0, trim:]))
     # Zero fill to 2*TD points
     spec = ng.proc_base.zf_double(data, proc_par['zero_fill'])
     # Calculates Line broadening (Topspin style) and divides value by sw in Hz
@@ -155,6 +168,16 @@ def process(data_path, proc_par, bgc_par, file_name, export, debug):
         #Automatic phase correction
         spec = ng.proc_autophase.autops(
             spec, "acme", p0=proc_par['ini_zero_order'], p1=proc_par['ini_first_order'])
+    # elif proc_par['auto_phase'] == 2:
+    #     endPhase = 0
+    #     for spectra in spec
+    #     while endPhase == 0:    
+    #         zeroPhase = input('Set zero order phase value')
+    #         firstPhase = input('Set first order phase value')
+    #         spec = ng.proc_base.ps(spec, p0=float(zeroPhase), p1=float(firstPhase))
+    #         plt.plot(ppm, spec[1, :])
+    #         print('Are you satisfied with the phasing?')
+    #         endPhase = input('Yes (1) or no (2)?')
     else:
         # Manual phase correction
         spec = ng.proc_base.ps(spec, p0=proc_par['zero_order'], p1=proc_par['first_order'])
@@ -166,10 +189,10 @@ def process(data_path, proc_par, bgc_par, file_name, export, debug):
         if bgc_par['enabled'] == 1:
             spec = (spec - bgc(ppm, spec, bgc_par['order'],
                                bgc_par['threshold'], bgc_par['function'])[0])
-        if export == 1: #Exporting REDOR points and Besselfunction to .csv files
-            spec = spec/np.max(spec)
+        if export == 1: #
+            spec = spec/np.max(spec) # make normalizing on export optional
             export_var = zip(freq, spec)
-            with open('output/' + file_name +'_hz.dat', 'w') as f:
+            with open(file_name +'_hz.dat', 'w') as f:
                 writer = csv.writer(f, delimiter='\t', lineterminator='\n')
                 writer.writerow(('ti: ', file_name))
                 writer.writerow(('##freq ', str(np.round(carrier_frequency, decimals=5))))
@@ -182,8 +205,9 @@ def process(data_path, proc_par, bgc_par, file_name, export, debug):
         if data.ndim == 1:
             plt.plot(ppm, spec)
         else:
-            plt.plot(ppm, spec[1, :])
-        # plt.xlim(ppm[0],ppm[-1])
+            plt.plot(ppm, spec[58,:])
+
+        plt.xlim(-800,800)
         # plt.ylim(-0.05,1.1)
     # spectral center in points. Required for integration
     # (calculating ppm to pt without using any find function)
@@ -304,7 +328,7 @@ def integration(data, integ_par, bgc_par, debug):
     if integ_par['experiment'] == 'REDOR' or 'RESPDOR':
         area = (np.ones(number_indirect_points)
                 .reshape(int(number_indirect_points/2), 2))
-    elif integ_par['experiment'] == 'SED':
+    elif integ_par['experiment'] == 'SED' or 'T1':
         area = np.ones(number_indirect_points)
     # Background correction and integration
     for i in range(number_indirect_points):
@@ -322,7 +346,7 @@ def integration(data, integ_par, bgc_par, debug):
         if integ_par['experiment'] == 'REDOR' or 'RESPDOR':
             # Puts REDOR and Echo intensities in same variable but different columns
             area[int(np.floor(i*0.5)), i%2] = (np.sum(data['spectra'][i, max_int:min_int]))
-        elif integ_par['experiment'] == 'SED':
+        elif integ_par['experiment'] == 'SED' or 'T1':
             area[i] = np.sum(data['spectra'][i, max_int:min_int])
         if debug == 1:
             # Using times font causes some unexplainable bug on my machine so
@@ -674,6 +698,92 @@ def sed_eval(data_path, data, eval_par, export, file_name, debug):
         plt.xlabel(r"$(2\tau^2)$ / ms$^2$")
         plt.ylabel(r"ln($\mathrm{I} / \mathrm{I}_{0}$)")
     return second_moment
+
+
+def t1_eval(data, eval_par, export, file_name, debug):
+    """Returns the T1 plot.
+
+    Parameters
+    ----------
+    data : TYPE
+        DESCRIPTION.
+    eval_par : TYPE
+        DESCRIPTION.
+    export : TYPE
+        DESCRIPTION.
+    file_name : TYPE
+        DESCRIPTION.
+    debug : TYPE
+        DESCRIPTION.
+
+    Returns
+    -------
+    TYPE
+        DESCRIPTION.
+
+    """
+
+    if eval_par['vendor'] == 'bruker':
+        # spin_rate = data['dictionary']['acqus']['CNST'][31] # MAS spin rate
+    elif eval_par['vendor'] == 'varian':
+        relax_delays = np.array(data['dictionary']['procpar']['d2']['values']) # MAS spin rate
+    # Number of points in F1 dimension
+    number_indirect_points = data['spectra'].shape[0]
+    # T1 fitting
+    # Find max value to be included in fit
+    fit_max = np.where(redor_int > eval_par['lim_par_fit'])
+    ########## REDOR analysis via quadratic function, typically within dS/S0 regime < 0.2
+    def fit_func(xaxis, const):
+        return const*xaxis*xaxis                           # Quadratic function
+    # Initial guess.
+    x0 = 10000                    # Initial guess of curvature value
+    # sigma = np.ones(fit_max[0][0]) # Std. deviation of y-data
+    [res1, res2] = (optimization.curve_fit(
+        fit_func, redor_ntr[0:fit_max[0][0]], redor_int[0:fit_max[0][0]], x0))
+    # Since redor_ntr is in ms, the M2 unit is 1e6 rad²s-²
+    second_moment = (
+        res1*(eval_par['quant_number']*(eval_par['quant_number']+1)*(np.pi**2)))
+
+    ########## Exporting data
+    if export == 1: #Exporting T1 points and fitfunction to .csv files
+        export_var = zip(redor_ntr, redor_int)
+        with open(file_name +'_REDOR.csv', 'w') as f:
+            writer = csv.writer(f, delimiter='\t', lineterminator='\n')
+            writer.writerow(('nTr/ms', 'S0-S/S0'))
+            for word in export_var:
+                writer.writerows([word])
+        scale = np.round(np.linspace(redor_ntr[0], redor_ntr[-1], 1000), decimals=4)
+        export_var2 = zip(scale, fit_func(scale, res1))
+        with open(file_name +'_fit.csv', 'w') as f:
+            writer = csv.writer(f, delimiter='\t', lineterminator='\n')
+            writer.writerow(
+                ('nTr/ms', 'S0-S/S0', 'M2 =',
+                  str(np.round(second_moment, decimals=4))+' 1e6 rad^2s^-2'))
+            for word in export_var2:
+                writer.writerows([word])
+        # #Exporting REDOR plot with Besselfunctions
+        # insert os dephasing spectrum after 6 increments like in Goldbourt paper
+        fig = plt.figure(figsize=(fig_width, fig_height))
+        plt.scatter(redor_ntr, redor_int, edgecolors='k')
+        # plt.scatter(redor_ntr, redor_int*1.7, edgecolors='k')
+        # plt.plot(redor_ntr, fit_func(redor_ntr, res1))
+        plt.plot(scale, fit_func(scale, res1), color='k')
+        # plt.xlim(0, 4)
+        plt.ylim(-0.05, 1)
+        plt.xlabel(r"NT$_{\mathrm{r}}$ / ms")
+        plt.ylabel(r"$\Delta \mathrm{S} / \mathrm{S}_{0}$")
+        fig.savefig(file_name + ".png", format='png', dpi=600, bbox_inches='tight')
+    if debug == 2:
+        ##### Plotting
+        fig = plt.figure(figsize=(fig_width, fig_height))
+        plt.scatter(redor_ntr, redor_int, edgecolors='k')
+        scale = np.linspace(redor_ntr[0], redor_ntr[-1], 1000)
+        plt.plot(scale, fit_func(scale, res1), color='k')
+        # plt.xlim(0, 4)
+        plt.ylim(-0.05, 1)
+        plt.xlabel(r"NT$_{\mathrm{r}}$ / ms")
+        plt.ylabel(r"$\Delta \mathrm{S} / \mathrm{S}_{0}$")
+    return second_moment
 ########## Style definitions
 fig_width_pt = 336.0  # Get this from LaTeX using \showthe\columnwidth
 inches_per_pt = 1.0/72.27               # Convert pt to inch
@@ -681,8 +791,7 @@ golden_mean = ((5)**(0.5)-1.0)/2.0      # Aesthetic ratio
 fig_width = fig_width_pt*inches_per_pt  # width in inches
 fig_height = fig_width*golden_mean      # height in inches
 #Figure options
-matplotlib.rcParams['text.latex.preamble'] = [
-    r"\usepackage{amsmath}\usepackage{fontenc}\usepackage{siunitx}"]
+matplotlib.rcParams['text.latex.preamble'] = r"\usepackage{amsmath}\usepackage{fontenc}\usepackage{siunitx}"
 plt.rc('text', usetex=True)
 plt.rc('lines', linewidth=1)
 plt.rc('axes', prop_cycle=(cycler('color', palettable.cmocean.sequential.Thermal_20.mpl_colors)),
