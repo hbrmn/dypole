@@ -34,8 +34,8 @@ import data_processing as dp
 # for nu in range(21):
 #     data_path = r"C:\Users\edwu5ea1\Documents\sciebo\data\NMR Data Bruker\300MHz MS\nmr\WURST_RESPDOR_rf-array-1200us\%s\pdata\1" % (nu+1)
 #     file_name = 'W_RES_1200us_' + str(50-(2*nu)) + 'kHz'   # Output file name
-data_path = r"C:\Users\HB\sciebo\data\NMR Data Bruker\400MHz MS\nmr\Biosilicate_Eder_B_Al\26\pdata\1"
-file_name = 'AlPO4'
+data_path = r"C:\Users\HB\sciebo\data\NMR Data Bruker\600MHz SC\nmr\P-Nick_Dissolution\28\pdata\1"
+file_name = 'PB3-P1-pre-B3'
 debug = 1   # debug = 1 to show all spectra and integration limits, debug = 2 to display REDOR curve and fit
 export = 1   # export = 1 to export redor curve and fits
 
@@ -44,32 +44,35 @@ proc_par = {'vendor' : 'bruker',     # 'bruker' or 'varian'
             'ini_zero_order':20,      # Initial phase value for zero-order phasing
             'ini_first_order':0,# Initial phase value for first-order phasing
             'first_order':300,        # first order phase correction value
-            'zero_order':70,        # zero order phase correction value
-            'line_broadening':10.0,   # Lorentzian broadening in Hz
+            'zero_order':-120,        # zero order phase correction value
+            'line_broadening':150.0,   # Lorentzian broadening in Hz
             'zero_fill': 1,          # Zero filling to a total of value*td
-            'cutoff' : 1,          # Cuts off FID by given factor. E.g., a value of 0.1 will use only 10% of the FID's points.
+            'cutoff' : 0.25,          # Cuts off FID by given factor. E.g., a value of 0.1 will use only 10% of the FID's points.
             'number_shift_points' : 0, # Number of points to shift the FID
-            'auto_phase':0 }         # 1 turns automatic phase correction on
+            'auto_phase':1 ,       # 1 turns automatic phase correction on
+            'effective_window':[-20,40]} #truncates data to work with in order to facilitate background correction etc
 
 # bgc: Parameters for background correction
 bgc_par = {'enabled': 1,          # 1 enabled, else disables
-             'order': 3,            # defines or der of polynomial function
-             'threshold': 0.2,  # threshold value for detecting what is signal and what is noise from data
-             'function': 'ah'}      # Cost function - for now only takes asymmetric huber function 'ah'.
+             'order': 7,            # defines or der of polynomial function
+             'threshold': 0.02,  # threshold value for detecting what is signal and what is noise from data
+             'function': 'ah',      # Cost function - for now only takes asymmetric huber function 'ah'.
+             'effective_window':None} # Needs to be implemented for 2D experiments
 
 # integPar: Parameters for signal integration.
-integ_par = {'lowerIntegLimit':-25,
-            'upperIntegLimit': -15,
-            'experiment':'REDOR'}     # Choose between 'REDOR', 'RESPDOR, or 'SED'
+integ_par = {'lowerIntegLimit':7,
+            'upperIntegLimit': 18,
+            'experiment':'REDOR',     # Choose between 'REDOR', 'RESPDOR, or 'SED'
+            'effective_window':None} # Implementation of bgc window needs to be done
 
 # evalPar: Parameters for analyzing the dephasing curves.
 eval_par  = {'vendor' : 'bruker',    # 'bruker' or 'varian'
-            'lim_par_fit': 0.2,      # Y-axis limit for parabola fit
+            'lim_par_fit': 0.1,      # Y-axis limit for parabola fit
             'limit_bes_fit': 0,      # REDOR points to be omitted from fit (counting backwards)
             'quant_number': 1/2,     # Spin quantum number of non-observed nucleus
             'nat_abund' : 1,         # Natural abundance of non-observed nucleus in case of shaped_redor
             'front_skip' : 0,        # Number of points to skip in the first points
-            'fit_max' : 0,          # Maximum number of points to include in fit
+            'fit_max' : 10,          # Maximum number of points to include in fit
             'xmax' : 0.04,           # Maximum of abscissa for plotting
             'ymax' : 0.1}            # Maximum of y-axis - must be a positive value
 
@@ -81,9 +84,9 @@ data = {'dictionary':dic, 'ppm_scale':ppm, 'freq_scale':freq,'spectra':spec, 'sf
 area = dp.integration(data, integ_par, bgc_par, debug)
 data['area'] = area
 
-# data['area'] = area[:,[1,0]]
-##### REDOR analysis
-# D = dp.respdor_eval(data,eval_par,export,file_name,debug)
+# # data['area'] = area[:,[1,0]]
+# ##### REDOR analysis
+# # D = dp.respdor_eval(data,eval_par,export,file_name,debug)
 M2 = dp.redor_eval(data,eval_par,export,file_name,debug)
 
 # M2 = dp.sed_eval(data_path,data, eval_par, export, file_name, debug)

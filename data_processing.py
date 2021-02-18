@@ -139,7 +139,6 @@ def process(data_path, proc_par, bgc_par, file_name, export, debug):
     if data.ndim == 1:
         data = data[proc_par['number_shift_points']:]
     else:
-        data = np.array(data[0][:,:])
         data = data[:, proc_par['number_shift_points']:]
     # zero-filling to a value 2^n
     data = (ng.proc_base.zf(
@@ -187,8 +186,9 @@ def process(data_path, proc_par, bgc_par, file_name, export, debug):
     if spec.ndim == 1:
         ## Background correction
         if bgc_par['enabled'] == 1:
-            spec = (spec - bgc(ppm, spec, bgc_par['order'],
-                               bgc_par['threshold'], bgc_par['function'])[0])
+            ppm, spec = bgc(ppm, spec, bgc_par['effective_window'], bgc_par['order'],
+                               bgc_par['threshold'], bgc_par['function'])
+            freq = ppm * carrier_frequency
         if export == 1: #
             spec = spec/np.max(spec) # make normalizing on export optional
             export_var = zip(freq, spec)
@@ -205,9 +205,9 @@ def process(data_path, proc_par, bgc_par, file_name, export, debug):
         if data.ndim == 1:
             plt.plot(ppm, spec)
         else:
-            plt.plot(ppm, spec[58,:])
+            plt.plot(ppm, spec[1,:])
 
-        plt.xlim(-800,800)
+        plt.xlim(proc_par['effective_window'])
         # plt.ylim(-0.05,1.1)
     # spectral center in points. Required for integration
     # (calculating ppm to pt without using any find function)
@@ -218,7 +218,7 @@ def process(data_path, proc_par, bgc_par, file_name, export, debug):
     return(freq, ppm, spec, dic, sfo_point)
 
 ########## background correction procedure
-def bgc(xaxis, yaxis, order, threshold, function):
+def bgc(xax, yax, window, order, threshold, function):
     """Returns the background corrected spectrum of the input spectral data.
 
     Parameters
@@ -246,6 +246,15 @@ def bgc(xaxis, yaxis, order, threshold, function):
 
     """
     #Rescaling the data
+    if window:
+        ppm_high = np.argmin(np.abs(xax-window[0]))
+        ppm_low = np.argmin(np.abs(xax-window[1]))
+        xaxis = xax[ppm_low:ppm_high]
+        yaxis = yax[ppm_low:ppm_high]
+    else:
+        xaxis = xax
+        yaxis = yax
+    
     num_points = len(xaxis)
     i = np.argsort(xaxis)
     yaxis = yaxis[i]
@@ -282,7 +291,13 @@ def bgc(xaxis, yaxis, order, threshold, function):
     z = (z[j]-1) * dely + maxy
     a[1] = a[1]-1
     a = a * dely
-    return(z, a, it)
+    if window:
+        spec = yax[ppm_low:ppm_high] - z
+        ppm = xax[ppm_low:ppm_high]
+    else:
+        spec = yax -z
+        ppm = xax
+    return(ppm, spec)
 
 ########## Baseline correction
 def integration(data, integ_par, bgc_par, debug):
@@ -335,12 +350,12 @@ def integration(data, integ_par, bgc_par, debug):
         #normalize data to see if autophase works faster
         data['spectra'] = data['spectra']/np.max(data['spectra'])
         if bgc_par['enabled'] == 1:
-            data['spectra'][i, :] = (data['spectra'][i, :]
-                                     - (bgc(data['ppm_scale'],
+            data['spectra'][i, :] = (bgc(data['ppm_scale'],
                                             data['spectra'][i, :],
+                                            bgc_par['effective_window'],
                                             bgc_par['order'],
                                             bgc_par['threshold'],
-                                            bgc_par['function'])[0]))
+                                            bgc_par['function'])[1])
         # Normalization
         # Integration
         if integ_par['experiment'] == 'REDOR' or 'RESPDOR':
@@ -443,7 +458,7 @@ def respdor_eval(data, eval_par, export, file_name, debug):
         plt.xlabel(r"NT$_{\mathrm{r}}$ / ms")
         plt.ylabel(r"$\Delta \mathrm{S} / \mathrm{S}_{0}$")
         fig.savefig(
-            file_name + ".png", format='png', dpi=600, bbox_inches='tight')
+            file_name + ".png", format='png', dpi=300, bbox_inches='tight')
     if debug == 2:
         ##### Plotting
         fig = plt.figure(figsize=(fig_width, fig_height))
@@ -483,7 +498,7 @@ def func_bessel(xaxis, dip_const):
                   + (4*ss.jv(0.25, 2*np.sqrt(2)*dip_const*xaxis)
                      *ss.jv(-0.25, 2*np.sqrt(2)*dip_const*xaxis))
                   + (2*ss.jv(0.25, 3*np.sqrt(2)*dip_const*xaxis)
-                     *ss.jv(-0.25, 3*np.sqrt(2)*dip_const*xaxis)))))
+                     *ss.jv(-0.25, 3*np.sqrt(2)*dip_const*xaxis)))))    
     elif quant_number == (5/2):
         return (nat_abund*(1/6)*
                 (5 -(np.pi*np.sqrt(2))/24 *
@@ -578,10 +593,10 @@ def redor_eval(data, eval_par, export, file_name, debug):
         # plt.plot(redor_ntr, fit_func(redor_ntr, res1))
         plt.plot(scale, fit_func(scale, res1), color='k')
         # plt.xlim(0, 4)
-        plt.ylim(-0.05, 1)
+        plt.ylim(-0.05, 1.2)
         plt.xlabel(r"NT$_{\mathrm{r}}$ / ms")
         plt.ylabel(r"$\Delta \mathrm{S} / \mathrm{S}_{0}$")
-        fig.savefig(file_name + ".png", format='png', dpi=600, bbox_inches='tight')
+        fig.savefig(file_name + ".png", format='png', dpi=300, bbox_inches='tight')
     if debug == 2:
         ##### Plotting
         fig = plt.figure(figsize=(fig_width, fig_height))
@@ -686,7 +701,7 @@ def sed_eval(data_path, data, eval_par, export, file_name, debug):
         plt.ylim(-eval_par['ymax'], 0.01)
         plt.xlabel(r"$(2\tau^2)$ / ms$^2$")
         plt.ylabel(r"ln($\mathrm{I} / \mathrm{I}_{0}$)")
-        fig.savefig(file_name + ".png", format='png', dpi=600, bbox_inches='tight')
+        fig.savefig(file_name + ".png", format='png', dpi=300, bbox_inches='tight')
     if debug == 2:
         ##### Plotting
         fig = plt.figure(figsize=(fig_width, fig_height))
@@ -700,91 +715,192 @@ def sed_eval(data_path, data, eval_par, export, file_name, debug):
     return second_moment
 
 
-def t1_eval(data, eval_par, export, file_name, debug):
-    """Returns the T1 plot.
+# def t1_eval(data, eval_par, export, file_name, debug):
+#     """Returns the T1 plot.
 
+#     Parameters
+#     ----------
+#     data : TYPE
+#         DESCRIPTION.
+#     eval_par : TYPE
+#         DESCRIPTION.
+#     export : TYPE
+#         DESCRIPTION.
+#     file_name : TYPE
+#         DESCRIPTION.
+#     debug : TYPE
+#         DESCRIPTION.
+
+#     Returns
+#     -------
+#     TYPE
+#         DESCRIPTION.
+
+#     """
+
+#     if eval_par['vendor'] == 'bruker':
+#         # spin_rate = data['dictionary']['acqus']['CNST'][31] # MAS spin rate
+#     elif eval_par['vendor'] == 'varian':
+#         relax_delays = np.array(data['dictionary']['procpar']['d2']['values']) # MAS spin rate
+#     # Number of points in F1 dimension
+#     number_indirect_points = data['spectra'].shape[0]
+#     # T1 fitting
+#     # Find max value to be included in fit
+#     fit_max = np.where(redor_int > eval_par['lim_par_fit'])
+#     ########## REDOR analysis via quadratic function, typically within dS/S0 regime < 0.2
+#     def fit_func(xaxis, const):
+#         return const*xaxis*xaxis                           # Quadratic function
+#     # Initial guess.
+#     x0 = 10000                    # Initial guess of curvature value
+#     # sigma = np.ones(fit_max[0][0]) # Std. deviation of y-data
+#     [res1, res2] = (optimization.curve_fit(
+#         fit_func, redor_ntr[0:fit_max[0][0]], redor_int[0:fit_max[0][0]], x0))
+#     # Since redor_ntr is in ms, the M2 unit is 1e6 rad²s-²
+#     second_moment = (
+#         res1*(eval_par['quant_number']*(eval_par['quant_number']+1)*(np.pi**2)))
+
+#     ########## Exporting data
+#     if export == 1: #Exporting T1 points and fitfunction to .csv files
+#         export_var = zip(redor_ntr, redor_int)
+#         with open(file_name +'_REDOR.csv', 'w') as f:
+#             writer = csv.writer(f, delimiter='\t', lineterminator='\n')
+#             writer.writerow(('nTr/ms', 'S0-S/S0'))
+#             for word in export_var:
+#                 writer.writerows([word])
+#         scale = np.round(np.linspace(redor_ntr[0], redor_ntr[-1], 1000), decimals=4)
+#         export_var2 = zip(scale, fit_func(scale, res1))
+#         with open(file_name +'_fit.csv', 'w') as f:
+#             writer = csv.writer(f, delimiter='\t', lineterminator='\n')
+#             writer.writerow(
+#                 ('nTr/ms', 'S0-S/S0', 'M2 =',
+#                   str(np.round(second_moment, decimals=4))+' 1e6 rad^2s^-2'))
+#             for word in export_var2:
+#                 writer.writerows([word])
+#         # #Exporting REDOR plot with Besselfunctions
+#         # insert os dephasing spectrum after 6 increments like in Goldbourt paper
+#         fig = plt.figure(figsize=(fig_width, fig_height))
+#         plt.scatter(redor_ntr, redor_int, edgecolors='k')
+#         # plt.scatter(redor_ntr, redor_int*1.7, edgecolors='k')
+#         # plt.plot(redor_ntr, fit_func(redor_ntr, res1))
+#         plt.plot(scale, fit_func(scale, res1), color='k')
+#         # plt.xlim(0, 4)
+#         plt.ylim(-0.05, 1)
+#         plt.xlabel(r"NT$_{\mathrm{r}}$ / ms")
+#         plt.ylabel(r"$\Delta \mathrm{S} / \mathrm{S}_{0}$")
+#         fig.savefig(file_name + ".png", format='png', dpi=600, bbox_inches='tight')
+#     if debug == 2:
+#         ##### Plotting
+#         fig = plt.figure(figsize=(fig_width, fig_height))
+#         plt.scatter(redor_ntr, redor_int, edgecolors='k')
+#         scale = np.linspace(redor_ntr[0], redor_ntr[-1], 1000)
+#         plt.plot(scale, fit_func(scale, res1), color='k')
+#         # plt.xlim(0, 4)
+#         plt.ylim(-0.05, 1)
+#         plt.xlabel(r"NT$_{\mathrm{r}}$ / ms")
+#         plt.ylabel(r"$\Delta \mathrm{S} / \mathrm{S}_{0}$")
+#     return second_moment
+########## Style definitions
+
+def stackplot(paths):
+    """Returns a stackplot of spectra within given list. For two spectra,
+    additionally returns difference spectra.
     Parameters
     ----------
-    data : TYPE
-        DESCRIPTION.
-    eval_par : TYPE
-        DESCRIPTION.
-    export : TYPE
-        DESCRIPTION.
-    file_name : TYPE
-        DESCRIPTION.
-    debug : TYPE
-        DESCRIPTION.
-
-    Returns
-    -------
-    TYPE
-        DESCRIPTION.
-
+    path_list : LIST
+    A list containing strings to the spectra in the (for now) dmfit format with their desired scaling factor and y-offset in percent.
+    Todo - add sanity check for same nuclear resonance frequencies among spectra
     """
+    # freqs = np.array()
+    # ints = np.array()
+    # DMFit data format
+    imp = [np.split(np.genfromtxt(x[0], dtype=None, usecols = (0,1), 
+                                  comments=None, encoding=None), [2], 0 ) 
+           for x in paths]
+    
+    carrier = [np.float(imp[x][0][1,1]) for x in range(len(imp))]
+    data = [imp[x][1].astype('float64') for x in range(len(imp))]
+    names = [paths[x][2] for x in range(len(paths))]
+    
+    # Calculate frequency axis limits for truncation of datasets
+    freq_limits = [np.min([data[x][0, 0] for x in range(len(data))]), 
+                   np.max([data[x][-1, 0] for x in range(len(data))])]
+    
+    # Get the indices of the upper and lower bounds found in previous step for each spectrum
+    iv = [[np.argmin(np.abs(data[x][:,0]-freq_limits[y]))
+           for y in range(2)] 
+          for x in range(len(data))]
 
-    if eval_par['vendor'] == 'bruker':
-        # spin_rate = data['dictionary']['acqus']['CNST'][31] # MAS spin rate
-    elif eval_par['vendor'] == 'varian':
-        relax_delays = np.array(data['dictionary']['procpar']['d2']['values']) # MAS spin rate
-    # Number of points in F1 dimension
-    number_indirect_points = data['spectra'].shape[0]
-    # T1 fitting
-    # Find max value to be included in fit
-    fit_max = np.where(redor_int > eval_par['lim_par_fit'])
-    ########## REDOR analysis via quadratic function, typically within dS/S0 regime < 0.2
-    def fit_func(xaxis, const):
-        return const*xaxis*xaxis                           # Quadratic function
-    # Initial guess.
-    x0 = 10000                    # Initial guess of curvature value
-    # sigma = np.ones(fit_max[0][0]) # Std. deviation of y-data
-    [res1, res2] = (optimization.curve_fit(
-        fit_func, redor_ntr[0:fit_max[0][0]], redor_int[0:fit_max[0][0]], x0))
-    # Since redor_ntr is in ms, the M2 unit is 1e6 rad²s-²
-    second_moment = (
-        res1*(eval_par['quant_number']*(eval_par['quant_number']+1)*(np.pi**2)))
+    #####
+    # For future - add spline interpolation if dwell-time is different between spectra    
+    #####
+    
+    output = [np.stack((data[x][iv[x][0]:iv[x][1], 0], 
+                        data[x][iv[x][0]:iv[x][1], 1]*paths[x][1]), axis=1) 
+              for x in range(len(data))]
+    
+    # This is needed to make the output arrays even in case the approximate "index finder" comes up with different column lenghts
+    [output[x].resize(np.min([iv[x][1]-iv[x][0] for x in range(len(iv))]), 2)
+     for x in range(len(output))]
+    
+    # creating difference spectrum
+    # output.append(np.array([output[0][:,0],(output[0][:,1]-np.sum([(output[x+1][:,1]) for x in range(len(output)-1)], axis=0))]).T)
 
-    ########## Exporting data
-    if export == 1: #Exporting T1 points and fitfunction to .csv files
-        export_var = zip(redor_ntr, redor_int)
-        with open(file_name +'_REDOR.csv', 'w') as f:
-            writer = csv.writer(f, delimiter='\t', lineterminator='\n')
-            writer.writerow(('nTr/ms', 'S0-S/S0'))
-            for word in export_var:
-                writer.writerows([word])
-        scale = np.round(np.linspace(redor_ntr[0], redor_ntr[-1], 1000), decimals=4)
-        export_var2 = zip(scale, fit_func(scale, res1))
-        with open(file_name +'_fit.csv', 'w') as f:
-            writer = csv.writer(f, delimiter='\t', lineterminator='\n')
-            writer.writerow(
-                ('nTr/ms', 'S0-S/S0', 'M2 =',
-                  str(np.round(second_moment, decimals=4))+' 1e6 rad^2s^-2'))
-            for word in export_var2:
-                writer.writerows([word])
-        # #Exporting REDOR plot with Besselfunctions
-        # insert os dephasing spectrum after 6 increments like in Goldbourt paper
-        fig = plt.figure(figsize=(fig_width, fig_height))
-        plt.scatter(redor_ntr, redor_int, edgecolors='k')
-        # plt.scatter(redor_ntr, redor_int*1.7, edgecolors='k')
-        # plt.plot(redor_ntr, fit_func(redor_ntr, res1))
-        plt.plot(scale, fit_func(scale, res1), color='k')
-        # plt.xlim(0, 4)
-        plt.ylim(-0.05, 1)
-        plt.xlabel(r"NT$_{\mathrm{r}}$ / ms")
-        plt.ylabel(r"$\Delta \mathrm{S} / \mathrm{S}_{0}$")
-        fig.savefig(file_name + ".png", format='png', dpi=600, bbox_inches='tight')
-    if debug == 2:
-        ##### Plotting
-        fig = plt.figure(figsize=(fig_width, fig_height))
-        plt.scatter(redor_ntr, redor_int, edgecolors='k')
-        scale = np.linspace(redor_ntr[0], redor_ntr[-1], 1000)
-        plt.plot(scale, fit_func(scale, res1), color='k')
-        # plt.xlim(0, 4)
-        plt.ylim(-0.05, 1)
-        plt.xlabel(r"NT$_{\mathrm{r}}$ / ms")
-        plt.ylabel(r"$\Delta \mathrm{S} / \mathrm{S}_{0}$")
-    return second_moment
-########## Style definitions
+    # names.append('Difference')
+    # carrier.append(carrier[0])
+    # data = [data for x < min]
+    
+    fig_width_pt = 336.0  # Get this from LaTeX using \showthe\columnwidth
+    inches_per_pt = 1.0/72.27               # 05Convert pt to inch
+    golden_mean = ((5)**(0.5)-1.0)/2.0         # Aesthetic ratio
+    fig_width = fig_width_pt*inches_per_pt  # width in inches
+    fig_height = fig_width*golden_mean      # height in inches
+    # Using times font causes some unexplainable bug on my machine so
+    # it is here substituted with serif
+    # Make Sliders for all spectra before plotting (scaling factors)
+    matplotlib.rcParams['text.latex.preamble'] = r"\usepackage{amsmath}\usepackage{fontenc}\usepackage{siunitx}"
+    plt.rc('text', usetex=True)
+    plt.rc('lines', linewidth=1)
+    plt.rc('axes', prop_cycle=(cycler('color', palettable.tableau.Gray_5.mpl_colors) + 
+                               cycler('linestyle', ['-', '-', '--', '--', '--'])),
+                               titlesize=11,
+                               labelsize=11)
+    plt.rc('font', **{'family':'serif', 'serif':['serif']})
+    
+    fig, ax = plt.subplots(figsize=(fig_width, fig_height))
+                           
+    [ax.plot(output[x][:,0]/carrier[x], output[x][:,1], label=names[x]) 
+     for x in range(len(output))]
+
+    ax.invert_xaxis()
+    ax.set_yticks([])
+    ax.set_xlim(40,-30)
+    # ax.set_xlabel(r"$\delta$($^{1}$H) / ppm")
+    ax.set_xlabel(r"$^{1}$H NMR shift / (ppm)")
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    #ax.spines['bottom'].set_visible(False)
+    ax.spines['left'].set_visible(False)
+    
+    handles,labels = ax.get_legend_handles_labels()
+    # handles = [handles[0], handles[1],handles[2]]
+    # labels = [labels[0], labels[1],labels[2]]
+    plt.legend(handles,labels,
+          fontsize='11', frameon=False, loc=1,
+          bbox_to_anchor=(0.6, 0.95, 0, 0),
+          ncol=1, mode="expand", borderaxespad=0.)
+    # plt.text(0.1, 0.30, "Glass", size=10,
+    #          va="baseline", ha="left", multialignment="left",transform=ax.transAxes)
+
+    plt.show()
+    
+    fig.savefig(names[0] + '.png', format='png', dpi=300, bbox_inches='tight')
+    
+    stackplot = 0
+    diffplot = 0
+
+    return stackplot, diffplot
+
+
 fig_width_pt = 336.0  # Get this from LaTeX using \showthe\columnwidth
 inches_per_pt = 1.0/72.27               # Convert pt to inch
 golden_mean = ((5)**(0.5)-1.0)/2.0      # Aesthetic ratio
@@ -796,8 +912,8 @@ plt.rc('text', usetex=True)
 plt.rc('lines', linewidth=1)
 plt.rc('axes', prop_cycle=(cycler('color', palettable.cmocean.sequential.Thermal_20.mpl_colors)),
 # plt.rc('axes', prop_cycle=(cycler('color', 'k')),
-       titlesize=11,
-       labelsize=11)
+        titlesize=11,
+        labelsize=11)
 plt.rc('xtick', labelsize=10)
 plt.rc('ytick', labelsize=10)
 plt.rc('font', **{'family':'serif', 'serif':['Times']})
