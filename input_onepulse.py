@@ -23,6 +23,7 @@ To do:
 """
 ##### Package imports
 import data_processing as dp
+import M2_calc as m2
 
 ##### Script Inputs and processing parameters
 # dataPath = r"/home/rm7c8/ownCloud/data/NMR Data Bruker/300MHz MS/nmr/ALW6/26/pdata/1"
@@ -62,7 +63,7 @@ paths = [[r'C:\Users\HB\data_work\Projects\8_Nick_Followup\MAS\1H\PB1-P3-7d_350C
 
 [stackplot, diffplot] = dp.stackplot(paths)
 
-
+second_moment = m2.DataSet(r'C:\Users\HB\sciebo\data\XRD Data\H3BO3\B-H_H3BO3.txt', '11B', '1H').second_moment()
 
 # make plotting function when transferring to class-based code
 # future: instead of outputting the spectra, output just the processing parameters and the raw data in order to be able to manipulate data later
