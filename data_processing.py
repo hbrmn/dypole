@@ -699,7 +699,7 @@ def sed_eval(data_path, data, eval_par, export, file_name, debug):
         plt.plot(scale, fit_func(scale, popt2[0]), color='k')
         plt.xlim(0, eval_par['xmax'])
         plt.ylim(-eval_par['ymax'], 0.01)
-        plt.xlabel(r"$(2\tau^2)$ / ms$^2$")
+        plt.xlabel(r"$(2\tau)^2$ / ms$^2$")
         plt.ylabel(r"ln($\mathrm{I} / \mathrm{I}_{0}$)")
         fig.savefig(file_name + ".png", format='png', dpi=300, bbox_inches='tight')
     if debug == 2:
