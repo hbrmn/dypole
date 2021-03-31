@@ -21,6 +21,9 @@ class Dataset:
         self.path = path
         self.name = name
         self.vendor = vendor
+        getData(self.path)
+
+    def getData(self, path, vendor):
         if vendor == 'bruker':
             dic, rawdata = ng.bruker.read(path)
             self.dic = dic

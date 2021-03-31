@@ -86,19 +86,14 @@ def process(data_path, proc_par, bgc_par, file_name, export, debug):
     if proc_par['vendor'] == 'bruker':
         
         dic, rawdata = ng.bruker.read(data_path)
-        
         carrier_frequency = dic['acqus']['SFO1']  # Transmitter frequency
         # rel_car_freq = (carrier_frequency-dic['acqus']['BF1'])*1e6
-        
         spectral_width = dic['acqus']['SW_h'] # spectral width
         # Relative transmitter offset to BF1: i.e. SFO1 - BF1
-        
         const_o1 = dic['acqus']['O1']
         # TOPSPIN SR value. Spectrometer reference value: i.e. SF - BF1
-        
         const_spec_ref = (dic['procs']['SF']-dic['acqus']['BF1'])*1e6
         # Calculates transmitter offset frequency relative to referenced 0 Hz/ppm
-        
         rel_offset_frequency = const_o1 - const_spec_ref
         # Checks dimensionality
         
@@ -209,6 +204,12 @@ def process(data_path, proc_par, bgc_par, file_name, export, debug):
 
         plt.xlim(proc_par['effective_window'])
         # plt.ylim(-0.05,1.1)
+    elif debug == 3:
+        plt.rc('font', **{'family':'serif', 'serif':['serif']})
+        if data.ndim == 1:
+            plt.plot(data[0:100])
+        else:
+            plt.plot(data[1,:])
     # spectral center in points. Required for integration
     # (calculating ppm to pt without using any find function)
     sfo_point = (int(np.round(
@@ -843,8 +844,12 @@ def stackplot(paths):
      for x in range(len(output))]
     
     # creating difference spectrum
-    # output.append(np.array([output[0][:,0],(output[0][:,1]-np.sum([(output[x+1][:,1]) for x in range(len(output)-1)], axis=0))]).T)
-
+    output.append(
+        np.array(
+            [output[0][:,0],(output[0][:,1]-
+                             np.sum([(output[x+1][:,1]) 
+                                     for x in range(len(output)-1)], axis=0))]).T)
+    names.append('Difference')
     # names.append('Difference')
     # carrier.append(carrier[0])
     # data = [data for x < min]
@@ -868,14 +873,14 @@ def stackplot(paths):
     
     fig, ax = plt.subplots(figsize=(fig_width, fig_height))
                            
-    [ax.plot(output[x][:,0]/carrier[x], output[x][:,1], label=names[x]) 
+    [ax.plot(output[x][:,0]/carrier[0], output[x][:,1], label=names[x]) 
      for x in range(len(output))]
 
     ax.invert_xaxis()
     ax.set_yticks([])
     ax.set_xlim(40,-30)
     # ax.set_xlabel(r"$\delta$($^{1}$H) / ppm")
-    ax.set_xlabel(r"$^{1}$H NMR shift / (ppm)")
+    ax.set_xlabel(r"$^{11}$B NMR shift / (ppm)")
     ax.spines['top'].set_visible(False)
     ax.spines['right'].set_visible(False)
     #ax.spines['bottom'].set_visible(False)
@@ -895,11 +900,22 @@ def stackplot(paths):
     
     fig.savefig(names[0] + '.png', format='png', dpi=300, bbox_inches='tight')
     
+    export_var = zip(output[2][:,0], output[2][:,1])
+    with open('diffplot_hz.dat', 'w') as f:
+        writer = csv.writer(f, delimiter='\t', lineterminator='\n')
+        writer.writerow(('ti: ', 'diffplot'))
+        writer.writerow(('##freq ', str(np.round(carrier[0], decimals=5))))
+        for word in export_var:
+            writer.writerows([word])
+    
     stackplot = 0
     diffplot = 0
 
     return stackplot, diffplot
 
+def split_add(data_path, ):
+    
+    return
 
 fig_width_pt = 336.0  # Get this from LaTeX using \showthe\columnwidth
 inches_per_pt = 1.0/72.27               # Convert pt to inch
