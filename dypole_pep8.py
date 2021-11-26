@@ -46,21 +46,21 @@ class Dataset:
         self.lb = lb
         self.get_data()
 
-        # Figure options
+        #Figure options
         fig_width_pt = 336.0  # From LaTeX: \showthe\columnwidth
         inches_per_pt = 1.0 / 72.27                    # pt to inch
-        golden_mean = ((5)**(0.5) - 1.0) / 2.0        # Golden ratio
+        golden_mean = ((5)**(0.5)  - 1.0) / 2.0        # Golden ratio
         self.fig_width = fig_width_pt * inches_per_pt  # width in inch
-        self.fig_height = self.fig_width * golden_mean  # height in inch
+        self.fig_height = self.fig_width * golden_mean # height in inch
         plt.rc('lines', linewidth=1)
         plt.rc('axes', prop_cycle=(
             cycler('color',
                    palettable.cmocean.sequential.Thermal_20.mpl_colors)),
-               # plt.rc('axes', prop_cycle=(cycler('color', 'k')),
-               titlesize=11, labelsize=11)
+        # plt.rc('axes', prop_cycle=(cycler('color', 'k')),
+                titlesize=11, labelsize=11)
         plt.rc('xtick', labelsize=10)
         plt.rc('ytick', labelsize=10)
-        plt.rc('font', **{'family': 'serif', 'serif': ['Times New Roman']})
+        plt.rc('font', **{'family':'serif', 'serif':['Times New Roman']})
 
     def reset(self):
         del self.spec
@@ -75,14 +75,16 @@ class Dataset:
         if self.vendor == 'bruker':
             self.dic, rawdata = ng.bruker.read(self.path)
             if 'acqu2s' in self.dic:
-                # Check if rawdata has right shape
+            # Check if rawdata has right shape
                 if len(rawdata) != self.dic['acqu2s']['TD']:
                     # If not, try to repair the data array
-                    aux = ng.bruker.guess_shape(self.dic)
-                    
-                    self.rawdata = np.reshape(
-                        rawdata,(int((aux[0][1]+aux[0][0])*2),
-                                 int(aux[0][2]/2)))[0:self.dic['acqu2s']['TD'],:]
+                    aux = np.array([self.dic['acqu2s']['TD'],
+                                    self.dic['acqus']['TD']])
+                    self.rawdata = (
+                        np.reshape(
+                            rawdata,
+                            (int((aux[0])),
+                             int(aux[1]/2)))[0:self.dic['acqu2s']['TD'], :])
                 else:
                     self.rawdata = rawdata
 
@@ -93,13 +95,13 @@ class Dataset:
                 # Zero fills the number of omitted initial points to value 2^n
                 self.rawdata = ng.proc_base.zf(
                     self.rawdata, (self.rawdata.shape[self.rawdata.ndim - 1]
-                                   - self.rawdata.shape[self.rawdata.ndim - 1]))
+                           - self.rawdata.shape[self.rawdata.ndim - 1]))
 
             self.car_freq = self.dic['acqus']['SFO1']
             self.spec_width = self.dic['acqus']['SW_h']
             self.rel_off_freq = (self.dic['acqus']['O1']
-                                 - (self.dic['procs']['SF']
-                                    - self.dic['acqus']['BF1']) * 1e6)
+                               - (self.dic['procs']['SF']
+                                  - self.dic['acqus']['BF1']) * 1e6)
         if self.vendor == 'varian':
             # Fetches the dictionary and NMR data from VNMR (Varian)
             # binary data.
@@ -117,6 +119,7 @@ class Dataset:
     ##### Processing #####
 
     def process(self):
+
         '''Returns frequency and ppm scales of input dataset as well as
         the data array, data dictionary and transmitter offset value
         (SFO) in points
@@ -144,8 +147,7 @@ class Dataset:
             if self.ls:
                 left_shift = self.ls
             else:
-                left_shift = int(
-                    input('Enter number of points to left shift: '))
+                left_shift = int(input('Enter number of points to left shift: '))
             if data.ndim == 1:
                 data = data[left_shift:]
             else:
@@ -159,8 +161,7 @@ class Dataset:
             if self.trim:
                 cutoff = self.trim
             else:
-                cutoff = float(
-                    input('Enter fraction (e.g. 0.5) of FID to be used: '))
+                cutoff = float(input('Enter fraction (e.g. 0.5) of FID to be used: '))
             # Calculates the number of points after which FID is set to zeros
             trim = int(cutoff * self.rawdata.shape[self.rawdata.ndim - 1])
 
@@ -181,8 +182,7 @@ class Dataset:
             if self.zf:
                 zero_fill = self.zf
             else:
-                zero_fill = int(
-                    input('Enter multiplier of number of points: '))
+                zero_fill = int(input('Enter multiplier of number of points: '))
             data = ng.proc_base.zf_double(data, zero_fill - 1)
             plt.plot(np.real(data[self.index][0]))
             plt.show()
@@ -236,6 +236,7 @@ class Dataset:
         #     plt.show()
         #     return spec
 
+
         # def auto_phase(self, spec):
 
         # Begin data processing
@@ -263,8 +264,8 @@ class Dataset:
             # Create frequency axis
             self.freq_scale = (
                 (np.arange((self.spec_width/2) + self.rel_off_freq,
-                           - self.spec_width/2 + self.rel_off_freq,
-                           - self.spec_width/length)))
+                               - self.spec_width/2 + self.rel_off_freq,
+                               - self.spec_width/length)))
 
             # Create ppm axis
             self.ppm_scale = self.freq_scale/self.car_freq
@@ -290,14 +291,16 @@ class Dataset:
 
             spec = ng.proc_base.di(spec)  # Discard the imaginaries
             if self.vendor == 'bruker':
-                spec = ng.proc_base.rev(spec)  # Reverse the spectrum
+                spec = ng.proc_base.rev(spec) # Reverse the spectrum
 
             # spec = [(spec[i] -  bg_corr(self.freq_scale, spec[i], 6, 0.002))
             #         for i in range(self.rawdata.shape[0])]
 
             self.spec = spec
 
+
     def integrate(self, back_corr=False):
+
         '''Returns the sum of the datapoints in the specified intervals
 
         Parameters
@@ -326,7 +329,7 @@ class Dataset:
             ppm_scale = self.ppm_scale
             spec = self.spec
             # ppm per point
-            ppm_per_pt = ((np.abs(ppm_scale[- 1])
+            ppm_per_pt = ((np.abs(ppm_scale[ - 1])
                            + np.abs(ppm_scale[0])) / len(ppm_scale))
             ylim = np.max(spec)
 
@@ -339,8 +342,7 @@ class Dataset:
             done = 0
             while done != 1:
                 x_low = int(input('Enter left bound for integration in ppm: '))
-                x_high = int(
-                    input('Enter right bound for integration in ppm: '))
+                x_high = int(input('Enter right bound for integration in ppm: '))
                 min_int = int(self.sfo_point - x_low / ppm_per_pt)
                 max_int = int(self.sfo_point - x_high / ppm_per_pt)
 
@@ -353,6 +355,7 @@ class Dataset:
                 plt.vlines(x_high, 0, ylim)
                 plt.show()
                 done = int(input('Selection OK? 1 - yes, 2 - no: '))
+
 
             # Number of points in F2 dimension
             #numberDirectPoints = self.dic['acqus']['TD']
@@ -368,8 +371,8 @@ class Dataset:
                 [np.sum(spec[i, min_int:max_int]) for i in range(num_points)])
 
             if self.experiment == 'REDOR' or self.experiment == 'RESPDOR':
-                area = area.reshape(int(num_points / 2), 2)
-
+                    area = area.reshape(int(num_points / 2), 2)
+    
             self.area = area
 
     ##### Exporting #####
@@ -387,6 +390,7 @@ class Dataset:
     ##### Experiment evaluation #####
 
     def sed_fid(self, export=False):
+
         '''Returns the homonuclear dipole-dipole second moment of a spin-echo
         decay experiment based in the FID intensities.
 
@@ -432,12 +436,11 @@ class Dataset:
             plt.show()
             done = int(input('Selection OK? 1 - yes, 2 - no: '))
 
-        # Linear regression analysis
+        ########## Linear regression analysis
         def fit_func_norm(xaxis, slope, yintercept):
-            return slope*xaxis+yintercept  # linear function with y-intercept
-
+            return slope*xaxis+yintercept # linear function with y-intercept
         def fit_func(xaxis, slope):
-            return slope*xaxis  # linear function w/o y-intercept
+            return slope*xaxis # linear function w/o y-intercept
 
         # Initial guess.
         # x0 = -100                    # Initial guess of curvature value
@@ -446,7 +449,7 @@ class Dataset:
         [popt, _] = (opt.curve_fit(fit_func_norm, x, y))
 
         # Normalization of data by y-intercept of first linear fit
-        sed_int = (np.log(np.exp(sed_int) /
+        sed_int = (np.log(np.exp(sed_int)/
                           np.exp(fit_func_norm(0, popt[0], popt[1]))))
         y = sed_int[x_low:x_high]
 
@@ -465,7 +468,7 @@ class Dataset:
             scale = np.round(np.linspace(time[0], time[-1], 1000),
                              decimals=4)
             fit = fit_func(scale, popt2[0])
-            result = ('M2 = ' + str(np.round(second_moment, decimals=4))
+            result = ('M2 = '+ str(np.round(second_moment, decimals=4))
                       + ' e6 rad^2s^-2')
             self.export(scale, fit, '2tau^2 / ms^2', 'ln(I/I0)', 'Fit',
                         result)
@@ -517,7 +520,7 @@ class Dataset:
         plt.show()
 
         def fit_func(time, amp, T1, beta):
-            return amp * (1 - np.exp(-(time/T1)**beta))  # saturation recovery
+            return amp * (1 - np.exp(-(time/T1)**beta)) # saturation recovery
 
         [popt, _] = (opt.curve_fit(fit_func, time, t1_int,
                                    bounds=(np.array([0, 0, 0.1]),
@@ -535,7 +538,7 @@ class Dataset:
                          decimals=4)
         fit = fit_func(scale, amp, T1, beta)
 
-        result = ('T1 = ' + str(np.round(T1, decimals=4)) + ' s'
+        result = ('T1 = '+ str(np.round(T1, decimals=4)) + ' s'
                   + 'beta = ' + str(np.round(beta, decimals=4)))
 
         self.export(scale, fit, 'tau / s', 'I', 'Fit', result)
@@ -553,7 +556,7 @@ class Dataset:
                     format='png', dpi=300, bbox_inches='tight')
         return T1, beta
 
-    def respdor_eval(self, spin=False, fit_lim=False):
+    def respdor_eval(self, fit_lim=False):
         """Returns the heterodipolar second moment value of a RESPDOR experiment
         and exports the deltaS/S0 data set together with a fitted bessel function.
 
@@ -579,85 +582,55 @@ class Dataset:
 
         # Number of points in F1 dimension
         number_indirect_points = self.dic['acqu2s']['TD']
-        
-        respdor_int = np.round((self.area[:, 1]-self.area[:, 0])
-                                / self.area[:, 1], decimals=4)  # calc DS
-        respdor_int = np.insert(respdor_int, 0, 1e-10)
+        respdor_int = (np.round((self.area[:, 1]-self.area[:, 0])
+                              /self.area[:, 1], decimals=4))  # calc DS
         loop_increment = (2*self.dic['acqus']['L'][1])
 
         # Builds the time scale
-        respdor_ntr = (np.round(np.arange(2/spin_rate, 
-                                          ((number_indirect_points/2)+0.1) * 
-                                          (loop_increment/spin_rate),
-                                          ((loop_increment/spin_rate))) * 1e3,
-                                decimals=2))
-        respdor_ntr = np.insert(respdor_ntr, 0, 1e-10)
+        respdor_ntr = (np.round
+                     (np.arange(2/spin_rate,
+                                ((number_indirect_points/2)+0.1)
+                                *(loop_increment/spin_rate),
+                                ((loop_increment/spin_rate)))* 1e3,
+                      decimals=2))
 
-        # Bessel function
-        
-        def sat_rec(xaxis, dip_const):
-            """Saturation-Based recoupling curve
-            Todo: make curve between integration regions -> 0
-            ----------
-            xaxis : numpy array of float
-                Time data as array
-            dip_const : float
-                Dipolar coupling constant in Hz.
-            nat_abund : float
-                Natural abundance of nonobserved nucleus.
-        
-            Returns
-            -------
-            float
-                Bessel function value for given values of time and dipolar coupling.
-        
-            """
-            spin_fact = 1 / (2 * spin + 1)
-            
-            def bessel_func(k):
-                return ((4 * spin - 2 * (k - 1)) * 
-                        ss.jv(0.25, k * np.sqrt(2) * dip_const * xaxis) * 
-                        ss.jv(-0.25, k * np.sqrt(2) * dip_const * xaxis))
-
-            return nat_abund * spin_fact * ( 
-                2 * spin - (spin_fact * np.pi * np.sqrt(2) / 4) * 
-                sum([bessel_func(k) for k in range(1, int(2*spin+1))]))
-        
         # RESPDOR analysis via Bessel function approach
         # after Goldbourt et al. doi: 10.1016/j.ssnm/r.2018.04.001
         # x0 = 500    # Initial guess of dipolar coupling constant in Hertz
-        nat_abund = 1  # Placeholder make abfragbar ##############
+        global nat_abund
+        global quant_number
+        nat_abund = 1 # Placeholder
+        quant_number = 9/2 # Placeholder
         # lower nat abundancy bound as ugly work around
         [res1, res2] = (
             opt.curve_fit(
-                sat_rec,
-                respdor_ntr[0:-1-fit_lim]/1000,
-                respdor_int[0:-1-fit_lim],
-                bounds=(1, np.inf), 
-                p0=300))
+                func_bessel,
+                respdor_ntr[0:-1-self.fit_lim]/1000,
+                respdor_int[0:-1-self.fit_lim],
+                bounds=([0], [np.inf])))
 
-        # Exporting data
+        #Exporting data
         self.export(respdor_ntr, respdor_int, 'nTr / ms', 'DS/S0',
                     'RESPDOR')
-        scale = np.round(np.linspace(respdor_ntr[0], respdor_ntr[-1], 1001),
+        scale = np.round(np.linspace(respdor_ntr[0], respdor_ntr[-1], 1000),
                          decimals=4)
-        fit = sat_rec(scale / 1000, res1)  # give res1 and res2 names
+        fit = func_bessel(scale, res1) # give res1 and res2 names
 
-        result = ('M2 = ' + str(np.round(res1, decimals=4)) + ' Unit'
+        result = ('M2 = '+ str(np.round(res1, decimals=4)) + ' Unit'
                   + 'res2 = ' + str(np.round(res2, decimals=4)))
 
-        self.export(scale / 1000, fit, 'M2 / rad^2 s^-2', 'DS/S0',
+        self.export(scale, fit, 'M2 / rad^2 s^-2', 'DS/S0',
                     'Fit', result)
 
         # Creating and saving RESPDOR plot
         fig = plt.figure(figsize=(self.fig_width, self.fig_height))
 
-        plt.scatter(respdor_ntr, respdor_int)
-        plt.plot(scale, sat_rec(scale / 1e3, res1),
+        plt.plot(respdor_ntr, respdor_int)
+        plt.plot(scale, func_bessel(scale, res1),
                  '--', color='b')
 
         plt.xlabel(r'$nTr$ / ms')
-        plt.ylabel(r'$\Delta$ S / S$_0$')
+        plt.ylabel(r'$\Delta S / S$_0$')
         fig.savefig(self.path + '\\' + self.name + '_RESPDOR.png',
                     format='png', dpi=300, bbox_inches='tight')
 
@@ -666,9 +639,8 @@ class Dataset:
 ##### Global Functions #####
 
 # Background correction
-
-
 def bg_corr(xaxis, yaxis, order, threshold):
+
     '''Returns the background corrected spectrum of the input data.
 
     Parameters
@@ -690,7 +662,7 @@ def bg_corr(xaxis, yaxis, order, threshold):
 
     '''
 
-    # Rescaling the data
+    #Rescaling the data
     num_points = len(xaxis)
     i = np.argsort(xaxis)
 
@@ -698,56 +670,96 @@ def bg_corr(xaxis, yaxis, order, threshold):
     maxy = np.max(yaxis)
     dely = (maxy-np.min(yaxis))/2
     num_points_corr = (2 * (xaxis[:] - xaxis[num_points-1])
-                       / (xaxis[num_points-1]-xaxis[0]) + 1)
+                     /(xaxis[num_points-1]-xaxis[0]) + 1)
 
     yaxis = (yaxis[:] - maxy) / dely + 1
-    # Creating Vandermonde matrix
+    #Creating Vandermonde matrix
     const_p = np.arange(0, order+1, 1)
-    # np.tile repeats arrays num_points_corr and const_p
+    #np.tile repeats arrays num_points_corr and const_p
     var_t = np.tile(num_points_corr,
                     (order+1, 1)).T ** np.tile(const_p, (num_points, 1))
-    # analog to MATLAB's pins function
+    #analog to MATLAB's pins function
     tinv = np.linalg.pinv(np.matmul(var_t.T, var_t))
     tinv = np.matmul(tinv, var_t.T)
-    # Initialisation (least-squares estimation)
+    #Initialisation (least-squares estimation)
     aux = np.matmul(tinv, yaxis)
     back_fun = np.matmul(var_t, aux)
-    # Other variables
+    #Other variables
     alpha = 0.99 * 0.5
     it = 0
     zp = np.ones(num_points)
 
-    # Fitting loop
+    #Fitting loop
     while (np.sum((back_fun-zp))**2)/(np.sum((zp))**2) > (1e-09):
-        it += 1  # Iteration
-        zp = back_fun  # Previous estimation
-        res = yaxis - back_fun  # Residual
-        # Add different functions atq, sh etc. here
+        it += 1         #Iteration
+        zp = back_fun          #Previous estimation
+        res = yaxis - back_fun #Residual
+        #### Add different functions atq, sh etc. here
         d = ((res*(2*alpha-1))*((res < threshold)*1)
              + (alpha*2*threshold-res) * ((res >= threshold)*1))
-        aux = np.matmul(tinv, (yaxis+d))  # Polynomial coefficients a
-        back_fun = np.matmul(var_t, aux)  # Polynomial
+        aux = np.matmul(tinv, (yaxis+d))   #Polynomial coefficients a
+        back_fun = np.matmul(var_t, aux)          #Polynomial
 
-    # Rescaling
+    #Rescaling
     j = np.argsort(i)
     back_fun = (back_fun[j]-1) * dely + maxy
     aux[1] = aux[1]-1
     aux = aux * dely
     return back_fun
 
+# Bessel function
+def func_bessel(xaxis, dip_const):
+    """Returns linear combinations of Bessel function according to
 
+    Parameters
+    ----------
+    xaxis : numpy array of float
+        Time data as array
+    dip_const : float
+        Dipolar coupling constant in Hz.
+    nat_abund : float
+        Natural abundance of nonobserved nucleus.
+
+    Returns
+    -------
+    float
+        Bessel function value for given values of time and dipolar coupling.
+
+    """
+    if quant_number == (3/2):
+        return (nat_abund*0.25*
+                (3 -(np.pi*np.sqrt(2))/16 *
+                 ((6*ss.jv(0.25, 1*np.sqrt(2)*dip_const*xaxis)
+                   *ss.jv(-0.25, 1*np.sqrt(2)*dip_const*xaxis))
+                  + (4*ss.jv(0.25, 2*np.sqrt(2)*dip_const*xaxis)
+                     *ss.jv(-0.25, 2*np.sqrt(2)*dip_const*xaxis))
+                  + (2*ss.jv(0.25, 3*np.sqrt(2)*dip_const*xaxis)
+                     *ss.jv(-0.25, 3*np.sqrt(2)*dip_const*xaxis)))))
+    elif quant_number == (5/2):
+        return (nat_abund*(1/6)*
+                (5 -(np.pi*np.sqrt(2))/24 *
+                 ((10*ss.jv(0.25, 1*np.sqrt(2)*dip_const*xaxis)
+                   *ss.jv(-0.25, 1*np.sqrt(2)*dip_const*xaxis))
+                  + (8*ss.jv(0.25, 2*np.sqrt(2)*dip_const*xaxis)
+                     *ss.jv(-0.25, 2*np.sqrt(2)*dip_const*xaxis))
+                  + (6*ss.jv(0.25, 3*np.sqrt(2)*dip_const*xaxis)
+                     *ss.jv(-0.25, 3*np.sqrt(2)*dip_const*xaxis))
+                  + (4*ss.jv(0.25, 4*np.sqrt(2)*dip_const*xaxis)
+                     *ss.jv(-0.25, 4*np.sqrt(2)*dip_const*xaxis))
+                  + (2*ss.jv(0.25, 5*np.sqrt(2)*dip_const*xaxis)
+                     *ss.jv(-0.25, 5*np.sqrt(2)*dip_const*xaxis)))))
 
 #----------------------------------------------------------------------------#
 
-
-Path = (r"C:\Users\HB\sciebo\data\NMR Data Bruker\300MHz MS\nmr\ALW6\25\pdata\1")
+Path = (r'C:\Users\HB\sciebo\data\NMR Data Bruker\600MHz SC\nmr\29Si-93Nb-Wilma\1\pdata\1')
 #         # + r'\210722-7Li-LS2-cryst_SEDLT.fid')
-nmr_data = Dataset(Path, 'ALW4', 'bruker', 2, 1, 2, 50)
+nmr_data = Dataset(Path, 'SiIrNb', 'bruker')#,
+                   #ls=2, trim=0.2, zf=2, lb=75)
 
-result = Dataset.respdor_eval(nmr_data, spin = 5/2, fit_lim = 0)
+# result = Dataset.respdor_eval(nmr_data)
 # T1, beta  = nmr_data.t1_eval(4, 1, 4, 20)
 
 # M2 = nmr_data.sed_fid(export='zoom')
 # test_var = nmr_data.t1_eval()
 
-# if __name__ == '__main__':
+#if __name__ == '__main__':
