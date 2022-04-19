@@ -157,7 +157,7 @@ class Dataset:
 
         @input_wrapper
         def trim(self, data):
-            if self.trim:
+            if self.trim is not False:
                 cutoff = self.trim
             else:
                 cutoff = float(
@@ -179,8 +179,11 @@ class Dataset:
 
         @input_wrapper
         def zero_fill(self, data):
-            if self.zf:
+            if self.zf is not False:
                 zero_fill = self.zf
+                if self.zf==0:
+                    zero_fill = int(
+                    input('Multiplier cannot be zero, enter multiplier of number of points: '))
             else:
                 zero_fill = int(
                     input('Enter multiplier of number of points: '))
@@ -191,7 +194,7 @@ class Dataset:
 
         @input_wrapper
         def apodize(self, data):
-            if self.lb:
+            if self.lb is not False:
                 exp_lb = self.lb
             else:
                 exp_lb = int(input('Enter exponential line broadeing in Hz: '))
