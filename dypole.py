@@ -6,7 +6,6 @@ Created on Wed Jan 22 14:31:16 2020
 
 @author: Henrik Bradtmüller - mail@bradtmueller.net - https://hbrmn.github.io/
 
-split in subclasses for REDOR, RESPDOR etc
 
 Functions
 ---------
@@ -49,9 +48,9 @@ class Dataset:
         # Figure options
         fig_width_pt = 336.0  # From LaTeX: \showthe\columnwidth
         inches_per_pt = 1.0 / 72.27                    # pt to inch
-        golden_mean = ((5)**(0.5) - 1.0) / 2.0        # Golden ratio
+        golden_mean = ((5)**(0.5) - 1.0) / 2.0         # Golden ratio
         self.fig_width = fig_width_pt * inches_per_pt  # width in inch
-        self.fig_height = self.fig_width * golden_mean  # height in inch
+        self.fig_height = self.fig_width * golden_mean # height in inch
         plt.rc('lines', linewidth=1)
         plt.rc('axes', prop_cycle=(
             cycler('color',
@@ -114,16 +113,10 @@ class Dataset:
                 np.float64(self.dic['procpar']['sfrq']['values'][0])
                 - self.car_freq) * 1e6
 
-    ##### Processing #####
-
     def process(self):
         '''Returns frequency and ppm scales of input dataset as well as
         the data array, data dictionary and transmitter offset value
         (SFO) in points
-
-        Todo: Make user choose either a string of all inputs e.g. 2, 0.5, 3,
-        or to choose following the script
-        Fix trimming not yielding 2^n number
         '''
         def input_wrapper(func):
             def inner(self, data):
@@ -141,17 +134,25 @@ class Dataset:
 
         @input_wrapper
         def left_shift(self, data):
-            if self.ls:
-                left_shift = self.ls
+            #Left-shift to FID max for integrative SED evaluation
+            if self.experiment == 'SED':
+                left_shift = [data[n,:].argmax() for n 
+                              in range(len(data))]
+                data = [ng.proc_base.ls(data[n], left_shift[n]) for n 
+                        in range(len(data))]
+                data = np.asarray(data)
             else:
-                left_shift = int(
-                    input('Enter number of points to left shift: '))
-            if data.ndim == 1:
-                data = data[left_shift:]
-            else:
-                data = data[:, left_shift:]
-            plt.plot(np.real(data[self.index][0][0:25]))
-            plt.show()
+                if self.ls:
+                    left_shift = self.ls
+                else:
+                    left_shift = int(
+                        input('Enter number of points to left shift: '))
+                if data.ndim == 1:
+                    data = data[left_shift:]
+                else:
+                    data = data[:, left_shift:]
+                plt.plot(np.real(data[self.index][0][0:25]))
+                plt.show()
             return data
 
         @input_wrapper
@@ -201,13 +202,38 @@ class Dataset:
             plt.plot(np.real(data[self.index][0]))
             plt.show()
             return data
+        
+        @input_wrapper
+        def manual_phase(self, spec):
+            self.zero_order = int(input('Enter zero order phasing: '))
+            self.first_order = int(input('Enter first order phasing: '))
+            spec = ng.proc_base.ps(spec, p0=self.zero_order,
+                                    p1=self.first_order)
+            plt.plot(spec[self.index][0])
+            plt.show()
+            return spec
 
-        def phase(self, spec):
+        def auto_phase(self, spec):
             spec = ng.proc_autophase.autops(spec, "acme", p0=0, p1=0)
             plt.plot(np.real(spec[self.index][0]))
             plt.show()
             return spec
 
+        @input_wrapper
+        def backcorr(self, spec):
+            poly_degree = int(input('Enter degree of polynomial: '))
+            threshold = float(input('Enter threshold (e.g., 0.02): '))
+            
+            spec_corr = [(spec[i] -  bg_corr(self.freq_scale, spec[i], 
+                                         poly_degree, threshold)) 
+                         for i in range(len(spec))]
+            spec = np.asarray(spec_corr)
+            
+            plt.plot(spec[1,:])
+            plt.show()
+            
+            return spec
+        
         # def phase(self, spec):
         #     self.zero_order = 0
         #     self.first_order = 0
@@ -218,23 +244,7 @@ class Dataset:
         #             done = int(input('Selection OK? 1 - yes, 2 - no: '))
         #     return spec
 
-        # @user_input
-        # def zero_phase(self, spec):
-        #     self.zero_order = int(input('Enter zero order phasing: '))
-        #     spec = ng.proc_base.ps(spec, p0=self.zero_order,
-        #                            p1=self.first_order)
-        #     plt.plot(spec[self.index][0])
-        #     plt.show()
-        #     return spec
 
-        # @user_input
-        # def first_phase(self, spec):
-        #     self.first_order = int(input('Enter first order phasing: '))
-        #     spec = ng.proc_base.ps(spec, p0=self.zero_order,
-        #                            p1=self.first_order)
-        #     plt.plot(spec[self.index][0])
-        #     plt.show()
-        #     return spec
 
         # def auto_phase(self, spec):
 
@@ -248,7 +258,7 @@ class Dataset:
 
         if proc == 1:
             data = self.rawdata
-
+            #find index of FID with maximum value among array
             self.index = np.where(data**2 == np.max(data**2))[0]
             plt.show()
 
@@ -286,14 +296,17 @@ class Dataset:
             # Normalize data - autophase works faster
             spec = spec/np.max(spec)
 
-            spec = phase(self, spec)
+            phasing = int(input('Automatic Phasing?: 1 - yes, 2 - no: '))
+            if phasing == 1:
+                spec = auto_phase(self, spec)
+            else:
+                spec = manual_phase(self,spec)
 
             spec = ng.proc_base.di(spec)  # Discard the imaginaries
             if self.vendor == 'bruker':
                 spec = ng.proc_base.rev(spec)  # Reverse the spectrum
 
-            # spec = [(spec[i] -  bg_corr(self.freq_scale, spec[i], 6, 0.002))
-            #         for i in range(self.rawdata.shape[0])]
+            spec = backcorr(self, spec)
 
             self.spec = spec
 
@@ -386,7 +399,7 @@ class Dataset:
 
     ##### Experiment evaluation #####
 
-    def sed_fid(self, export=False):
+    def sed_eval(self, fid=False, export=False):
         '''Returns the homonuclear dipole-dipole second moment of a spin-echo
         decay experiment based in the FID intensities.
 
@@ -409,14 +422,29 @@ class Dataset:
         if self.vendor == 'varian':
             vdlist = (np.array(
                 self.dic['procpar']['t1Xecho']['values']).astype(float))
+        if self.vendor == 'bruker':
+            vdlist = np.array([10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150,
+                              160, 170, 180, 190, 200, 210, 220, 230, 240, 250, 260, 270, 280])
+                               
+        vdlist = vdlist
 
         # time scale (2tau) in ms²
         time = (((vdlist*1e-3)*2)**2)
 
         # Calculates log(I/I0)
-        sed_int = (np.abs(self.rawdata)).max(axis=1).reshape(len(time))
+        if fid:
+            sed_int = (np.abs(self.rawdata)).max(axis=1).reshape(len(time))
+        else:
+            self.integrate()
+            sed_int = self.area
+            
         sed_int = np.log(sed_int/sed_int[0])
-
+        
+        # Removes missing experiments, yielding all zero FID's
+        if np.any(np.isinf(sed_int)):
+            max_index = np.where(np.isinf(sed_int))[0][0]
+            time = time[0:max_index]
+            sed_int = sed_int[0:max_index]
         # Plot data
         plt.scatter(time, sed_int, color='w', edgecolors='k')
         plt.show()
@@ -477,11 +505,15 @@ class Dataset:
             plt.plot(scale, fit_func(scale, popt2[0]), color='k')
 
             if export == 'full':
-                plt.xlim(-0.025, time[-2]+0.025)
-                plt.ylim(sed_int[-2]-0.25, -0.025)
+                plt.xlim(-0.005, 0.38)
+                # plt.xlim(-0.005, time[-4]+0.025)
+                plt.ylim(-3, 0.025)
+                # plt.ylim(sed_int[-4]-0.25, 0.025)
             elif export == 'zoom':
-                plt.xlim(0, time[x_high+10])
-                plt.ylim(sed_int[x_high]*2, 0.025)
+                # plt.xlim(0, time[x_high+10])
+                plt.xlim(-0.001, 0.041)
+                # plt.ylim(sed_int[x_high]*2, 0.025)
+                plt.ylim(-1.5, 0.025)
 
             plt.xlabel(r'(2$\tau$)$^2$ / ms$^2$')
             plt.ylabel(r'ln(I / I$_{0}$)')
@@ -516,15 +548,30 @@ class Dataset:
         plt.plot(time, t1_int)
         plt.show()
 
-        def fit_func(time, amp, T1, beta):
+        def mono_exp_fit(time, amp, T1, beta):
             return amp * (1 - np.exp(-(time/T1)**beta))  # saturation recovery
+        
+        def biexp_fit(time, amp1, T1a, beta1, amp2, T1b, beta2):
+            return (amp1 * (1 - np.exp(-(time/T1a)**beta1)) 
+                    + amp2 * (1 - np.exp(-(time/T1b)**beta2)))
+        
+        fit_type = int(input('Mono (1) or Bi (2) exponential fit?: '))
+        
+        if fit_type == 1:
+            [popt, _] = (opt.curve_fit(mono_exp_fit, time, t1_int,
+                                       bounds=(np.array([0, 0, 0.1]),
+                                               np.array([np.inf, np.inf, 1]
+                                                        ))))
+            amp, T1, beta = popt[0], popt[1], popt[2]
+        else:
+            [popt, _] = (opt.curve_fit(biexp_fit, time, t1_int,
+                                       bounds=(np.array([0, 0, 0.1, 0, 0, 0.1]),
+                                               np.array([np.inf, np.inf, 1,
+                                                         np.inf, np.inf, 1]
+                                                        ))))
+            amp1, T1a, beta1, amp2, T1b, beta2 = popt[0], popt[1], popt[2], popt[3], popt[4], popt[5]
 
-        [popt, _] = (opt.curve_fit(fit_func, time, t1_int,
-                                   bounds=(np.array([0, 0, 0.1]),
-                                           np.array([np.inf, np.inf, 1]
-                                                    ))))
 
-        amp, T1, beta = popt[0], popt[1], popt[2]
 
         # Exporting data
 
@@ -533,25 +580,32 @@ class Dataset:
         # Fit
         scale = np.round(np.linspace(time[0], time[-1], 1000),
                          decimals=4)
-        fit = fit_func(scale, amp, T1, beta)
+        if fit_type == 1:
+            fit = mono_exp_fit(scale, amp, T1, beta)
+            result = ('T1 = ' + str(np.round(T1, decimals=4)) + ' s'
+                      + 'beta = ' + str(np.round(beta, decimals=4)))
+        else:
+            fit = biexp_fit(scale, amp1, T1a, beta1, amp2, T1b, beta2)
+            result = ('T1a = ' + str(np.round(T1a, decimals=4)) + ' s, '
+                      + 'beta1 = ' + str(np.round(beta1, decimals=4)) 
+                      + ', T1b = ' + str(np.round(T1b, decimals=4)) + ' s, ' 
+                      + 'beta2 = ' + str(np.round(beta2, decimals=4)))
 
-        result = ('T1 = ' + str(np.round(T1, decimals=4)) + ' s'
-                  + 'beta = ' + str(np.round(beta, decimals=4)))
-
+        
         self.export(scale, fit, 'tau / s', 'I', 'Fit', result)
 
         # Creating and saving T1 plot
         fig = plt.figure(figsize=(self.fig_width, self.fig_height))
 
         plt.plot(time, t1_int)
-        plt.plot(scale, fit_func(scale, amp, T1, beta),
+        plt.plot(scale, fit,
                  '--', color='b')
 
         plt.xlabel(r'$\tau$ / s')
         plt.ylabel(r'I/I$_0$')
         fig.savefig(self.path + '\\' + self.name + '_T1.png',
                     format='png', dpi=300, bbox_inches='tight')
-        return T1, beta
+        return result
 
     def respdor_eval(self, spin=False, fit_lim=False):
         """Returns the heterodipolar second moment value of a RESPDOR experiment
@@ -643,10 +697,9 @@ class Dataset:
                          decimals=4)
         fit = sat_rec(scale / 1000, res1)  # give res1 and res2 names
 
-        result = ('M2 = ' + str(np.round(res1, decimals=4)) + ' Unit'
-                  + 'res2 = ' + str(np.round(res2, decimals=4)))
+        result = ('M2 = ' + str(np.round(res1, decimals=4)) + ' rad^2 s^-2')
 
-        self.export(scale / 1000, fit, 'M2 / rad^2 s^-2', 'DS/S0',
+        self.export(scale / 1000, fit, 'NTr / ms', 'DS/S0',
                     'Fit', result)
 
         # Creating and saving RESPDOR plot
@@ -740,14 +793,14 @@ def bg_corr(xaxis, yaxis, order, threshold):
 #----------------------------------------------------------------------------#
 
 
-Path = (r"C:\Users\HB\sciebo\data\NMR Data Bruker\300MHz MS\nmr\ALW6\25\pdata\1")
+Path = (r"C:\Users\HB\data_work\Projects\1_Crystallization_I\LS2\7Li_Satrec\1h")
 #         # + r'\210722-7Li-LS2-cryst_SEDLT.fid')
-nmr_data = Dataset(Path, 'ALW4', 'bruker', 2, 1, 2, 50)
+nmr_data = Dataset(Path, 'LS2-1h', 'varian', 4, 1, 4, 20)
 
-result = Dataset.respdor_eval(nmr_data, spin = 5/2, fit_lim = 0)
-# T1, beta  = nmr_data.t1_eval(4, 1, 4, 20)
+# result = Dataset.respdor_eval(nmr_data, spin = 9/2, fit_lim = 2)
+result  = nmr_data.t1_eval()
 
-# M2 = nmr_data.sed_fid(export='zoom')
+# M2 = nmr_data.sed_eval(export='zoom', fid=True)
 # test_var = nmr_data.t1_eval()
 
 # if __name__ == '__main__':
