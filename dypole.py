@@ -309,7 +309,9 @@ class Dataset:
             if self.vendor == 'bruker':
                 spec = ng.proc_base.rev(spec)  # Reverse the spectrum
 
-            spec = backcorr(self, spec)
+            correction = int(input('Baseline Correction?: 1 - yes, 2 - no: '))
+            if correction == 1:
+                spec = backcorr(self, spec)
 
             self.spec = spec
 
@@ -542,10 +544,11 @@ class Dataset:
                 self.dic['procpar']['d2']['values']).astype(float))
 
         # time scale in s
-        time = vdlist
+        time = vdlist[0:len(self.area)-3]
 
         # normalized intensities
         t1_int = self.area/np.max(self.area)
+        t1_int = t1_int[0:len(self.area)-3]
 
         # Plot data
         plt.plot(time, t1_int)
@@ -568,13 +571,11 @@ class Dataset:
             amp, T1, beta = popt[0], popt[1], popt[2]
         else:
             [popt, _] = (opt.curve_fit(biexp_fit, time, t1_int,
-                                       bounds=(np.array([0, 0, 0.1, 0, 0, 0.1]),
+                                       bounds=(np.array([0, 0, 0.99999, 0, 0, 0.99999]),
                                                np.array([np.inf, np.inf, 1,
-                                                         np.inf, np.inf, 1]
+                                                         0.1, np.inf, 1]
                                                         ))))
             amp1, T1a, beta1, amp2, T1b, beta2 = popt[0], popt[1], popt[2], popt[3], popt[4], popt[5]
-
-
 
         # Exporting data
 
@@ -585,12 +586,14 @@ class Dataset:
                          decimals=4)
         if fit_type == 1:
             fit = mono_exp_fit(scale, amp, T1, beta)
-            result = ('T1 = ' + str(np.round(T1, decimals=4)) + ' s'
+            result = ('T1 = ' + str(np.round(T1, decimals=4)) + ' s, '
                       + 'beta = ' + str(np.round(beta, decimals=4)))
         else:
             fit = biexp_fit(scale, amp1, T1a, beta1, amp2, T1b, beta2)
-            result = ('T1a = ' + str(np.round(T1a, decimals=4)) + ' s, '
+            result = ('amp1 = ' + str(np.round(amp1, decimals=4))
+                      + ', T1a = ' + str(np.round(T1a, decimals=4)) + ' s, '
                       + 'beta1 = ' + str(np.round(beta1, decimals=4)) 
+                      + ', amp2 = ' + str(np.round(amp2, decimals=4))
                       + ', T1b = ' + str(np.round(T1b, decimals=4)) + ' s, ' 
                       + 'beta2 = ' + str(np.round(beta2, decimals=4)))
 
@@ -600,15 +603,133 @@ class Dataset:
         # Creating and saving T1 plot
         fig = plt.figure(figsize=(self.fig_width, self.fig_height))
 
-        plt.plot(time, t1_int)
+        plt.scatter(time, t1_int, color='w', edgecolors='k')
         plt.plot(scale, fit,
-                 '--', color='b')
+                 '--', color='k')
+        if fit_type == 2:
+            plt.plot(scale, mono_exp_fit(scale, amp1, T1a, beta1), '--', color='b')
+            plt.plot(scale, mono_exp_fit(scale, amp2, T1b, beta2), '--', color='g')
 
-        plt.xlabel(r'$\tau$ / s')
+        plt.xlabel(r'$t$ / s')
         plt.ylabel(r'I/I$_0$')
+        # plt.axhline(y=1.0, color='k', linestyle='--')
         fig.savefig(self.path + '\\' + self.name + '_T1.png',
                     format='png', dpi=300, bbox_inches='tight')
         return result
+
+    def sae_eval(self, fid=False, fit_lim=False):
+         '''
+
+         Returns
+         -------
+         None.
+
+         '''
+
+         self.experiment = 'SAE'
+         
+         if fid:
+             sae_int = np.abs(self.rawdata).max(axis=1)
+         else:
+             self.integrate()
+             sae_int = self.area
+             
+         
+         if self.vendor == 'varian':
+             vdlist = (np.array(
+                 self.dic['procpar']['tau2']['values']).astype(float))
+         
+         # time scale in s
+         time = vdlist*1e-6
+         
+         if fit_lim == False:
+             fit_lim = len(time)
+             
+         fit_time = time[0:fit_lim]
+
+         # normalized intensities
+         sae_int = sae_int/sae_int[0]
+         fit_int = sae_int[0:fit_lim]
+
+         # Plot data
+         plt.scatter(time, sae_int, color = 'w', edgecolor = 'k')
+         plt.semilogx(time, sae_int, '--')
+         plt.show()
+
+         def mono_exp_fit(time, Tsae, beta):
+             return (np.exp(-(time*Tsae)**beta))  # saturation recovery
+         
+         def Tsae_exp(time, A, Tsae, beta1, B):
+             return (A * np.exp(-(time*Tsae))**beta1 + B)
+         
+         def T1sae_exp(time, T1sae, beta2):
+             return (np.exp(-(time*T1sae)**beta2))
+             
+         def biexp_fit(time, A, Tsae, beta1, B, T1sae, beta2):
+             return (Tsae_exp(time, A, Tsae, beta1, B) * T1sae_exp(time, T1sae, beta2))
+         
+         fit_type = int(input('Mono (1) or Bi (KWW) (2) exponential fit?: '))
+         
+         if fit_type == 1:
+             [popt, _] = (opt.curve_fit(mono_exp_fit, fit_time, fit_int,
+                                        bounds=(np.array([0.1, 0.1]),
+                                                np.array([np.inf, 1]
+                                                         ))))
+             Tsae, beta = popt[0], popt[1]
+         elif fit_type == 2:
+             [popt, _] = (opt.curve_fit(biexp_fit, fit_time, fit_int,
+                                        bounds=(np.array([ 0, 0, 0, 0, 0, 0]),
+                                                np.array([1, np.inf, 1, 1, np.inf, 1]
+                                                         ))))
+             A, Tsae, beta1, B, T1sae, beta2 = popt[0], popt[1], popt[2], popt[3], popt[4], popt[5]
+             S_inf = B/(A+B)
+         # elif fit_type == 3:
+             
+
+         # Exporting data
+         
+         
+
+         # Experimental data
+         self.export(time, sae_int, 'tau / s', 'I', 'SAE')
+         # Fit
+         scale = np.geomspace(time[0], time[-1], num=1000)
+         if fit_type == 1:
+             fit = mono_exp_fit(scale, Tsae, beta)
+             result = ('Tsae-1 = ' + str(np.round(Tsae, decimals=4)) + ' Hz, '
+                       + 'beta = ' + str(np.round(beta, decimals=4)))
+         else:
+             fit = biexp_fit(scale, A, Tsae, beta1, B, T1sae, beta2)
+             result = ('S_inf = ' + str(np.round(S_inf, decimals=4))
+                       + ', T1sae-1 = ' + str(np.round(Tsae, decimals=4)) + ' Hz, '
+                       + 'beta1 = ' + str(np.round(beta1, decimals=4)) 
+                       + ', T1sae-1 = ' + str(np.round(T1sae, decimals=4)) + ' Hz, ' 
+                       + 'beta2 = ' + str(np.round(beta2, decimals=4)))
+
+         
+         self.export(scale, fit, 'tau / s', 'I', 'Fit', result)
+
+         # Creating and saving T1 plot
+         fig = plt.figure(figsize=(self.fig_width, self.fig_height))
+
+         plt.scatter(time, sae_int, color = 'w', edgecolor = 'k')
+         plt.semilogx(scale, fit, '-', color='k')
+         
+         y_min = sae_int[-1]*0.5
+         
+         if fit_type == 2:
+             plt.loglog(scale, (Tsae_exp(scale, A, Tsae, beta1, 0) 
+                                * T1sae_exp(scale, T1sae, beta2)) + y_min, '--', color='g')
+             plt.loglog(scale, (T1sae_exp(scale, T1sae, beta2) * B), '--', color='m')
+
+         plt.ylim(y_min*0.9, 1.2)
+         # plt.xlim(1e-6, 100)
+         plt.xlabel(r'mixing time $t_m$ / s')
+         plt.ylabel(r'$S_2$ ($t_p$, $t_m$) / a.u.')
+         fig.savefig(self.path + '\\' + self.name + '_SAE.png',
+                     format='png', dpi=300, bbox_inches='tight')
+
+         return result
 
     def respdor_eval(self, spin=False, fit_lim=False):
         """Returns the heterodipolar second moment value of a RESPDOR experiment
@@ -642,7 +763,7 @@ class Dataset:
         respdor_int = np.insert(respdor_int, 0, 1e-10)
         loop_increment = (2*self.dic['acqus']['L'][1])
 
-        # Builds the time scale
+        # Builds the time scale in ms
         respdor_ntr = (np.round(np.arange(2/spin_rate, 
                                           ((number_indirect_points/2)+0.1) * 
                                           (loop_increment/spin_rate),
@@ -685,11 +806,11 @@ class Dataset:
         # x0 = 500    # Initial guess of dipolar coupling constant in Hertz
         nat_abund = 1  # Placeholder make abfragbar ##############
         # lower nat abundancy bound as ugly work around
-        [res1, res2] = (
+        [dipole_const, res2] = (
             opt.curve_fit(
                 sat_rec,
-                respdor_ntr[0:-1-fit_lim]/1000,
-                respdor_int[0:-1-fit_lim],
+                respdor_ntr[0:-1-self.fit_lim]/1000,
+                respdor_int[0:-1-self.fit_lim],
                 bounds=(1, np.inf), 
                 p0=300))
 
@@ -698,26 +819,111 @@ class Dataset:
                     'RESPDOR')
         scale = np.round(np.linspace(respdor_ntr[0], respdor_ntr[-1], 1001),
                          decimals=4)
-        fit = sat_rec(scale / 1000, res1)  # give res1 and res2 names
+        fit = sat_rec(scale / 1000, dipole_const)
 
-        result = ('M2 = ' + str(np.round(res1, decimals=4)) + ' rad^2 s^-2')
+        result = ('dip_const = ' + str(np.round(dipole_const, decimals=4)) + ' Hz')
 
-        self.export(scale / 1000, fit, 'NTr / ms', 'DS/S0',
-                    'Fit', result)
+        self.export(scale / 1000, fit, 'NTr / ms', 'DS/S0', 'Fit', result)
 
         # Creating and saving RESPDOR plot
         fig = plt.figure(figsize=(self.fig_width, self.fig_height))
 
         plt.scatter(respdor_ntr, respdor_int)
-        plt.plot(scale, sat_rec(scale / 1e3, res1),
+        plt.plot(scale, sat_rec(scale / 1e3, dipole_const),
                  '--', color='b')
 
         plt.xlabel(r'$nTr$ / ms')
         plt.ylabel(r'$\Delta$ S / S$_0$')
+        plt.ylim(-0.05, 1.2)
         fig.savefig(self.path + '\\' + self.name + '_RESPDOR.png',
                     format='png', dpi=300, bbox_inches='tight')
 
-        return res1[0]
+        return dipole_const[0]
+    
+    def redor_eval(self, spin=False, fit_lim=False):
+        """Returns the heterodipolar second moment value of a REDOR experiment
+        and exports the deltaS/S0 data set together with a quadratic fit.
+
+        Parameters
+        ----------
+
+        Returns
+        -------
+        TYPE
+            DESCRIPTION.
+
+        """
+        self.experiment = 'REDOR'
+
+        self.fit_lim = fit_lim
+
+        self.integrate()
+
+        if self.vendor == 'bruker':
+            spin_rate = self.dic['acqus']['CNST'][31]
+        elif self.vendor == 'varian':
+            spin_rate = self.dic['procpar']['srate']['values'][0]
+    
+        # Number of points in F1 dimension
+        number_indirect_points = self.dic['acqu2s']['TD']
+        
+        redor_int = np.round((self.area[:, 1]-self.area[:, 0])
+                                / self.area[:, 1], decimals=4)  # calc DS
+        redor_int = np.insert(redor_int, 0, 0)
+        
+        loop_increment = (self.dic['acqus']['L'][1])
+
+        # Builds the time scale in ms
+        redor_ntr = (np.round(np.arange(2/spin_rate, 
+                                          ((number_indirect_points/2)+0.1) * 
+                                          (loop_increment/spin_rate),
+                                          ((loop_increment/spin_rate))) * 1e3,
+                                decimals=3))
+        redor_ntr = np.insert(redor_ntr, 0, 0)
+        
+        fit_max = np.where(redor_int > fit_lim)
+        
+        # REDOR analysis via quadratic function, 
+        # typically within dS/S0 regime < 0.2 for glasses
+        
+        def quad_func(xaxis, const):
+            return const*xaxis**2
+        
+        # Initial guess of curvature value
+        x0 = 10000                    
+        # sigma = np.ones(fit_max[0][0]) # Std. deviation of y-data
+        [res1, res2] = (opt.curve_fit(quad_func, 
+                                      redor_ntr[0:fit_max[0][0]], 
+                                      redor_int[0:fit_max[0][0]], x0))
+        
+        # Since redor_ntr is in ms, the M2 unit is 1e6 rad²s-²
+        second_moment = (res1*(spin*(spin+1)*(np.pi**2)))
+    
+        # Exporting data
+        self.export(redor_ntr, redor_int, 'nTr / ms', 'DS/S0', 'REDOR')
+        
+        scale = np.round(np.linspace(redor_ntr[0], redor_ntr[-1], 1001),
+                         decimals=4)
+        fit = quad_func(scale, res1)  
+        
+        result = ('M2 = ' + str(np.round(second_moment, decimals=4)) 
+                  + ' rad^2 s^-2')
+        
+        self.export(scale, fit, '$NT_r$ / ms', 'DS/S0', 'Fit', result)
+        
+        # Creating and saving REDOR plot
+        fig = plt.figure(figsize=(self.fig_width, self.fig_height))
+
+        plt.scatter(redor_ntr, redor_int)
+        plt.plot(scale, quad_func(scale, res1), '--', color='b')
+
+        plt.xlabel(r'$nTr$ / ms')
+        plt.ylabel(r'$\Delta$ S / S$_0$')
+        plt.ylim(-0.05, 1.2)
+        fig.savefig(self.path + '\\' + self.name + '_REDOR.png',
+                    format='png', dpi=300, bbox_inches='tight')
+        
+        return second_moment
 
 ##### Global Functions #####
 
@@ -796,14 +1002,29 @@ def bg_corr(xaxis, yaxis, order, threshold):
 #----------------------------------------------------------------------------#
 
 
-Path = (r"C:\Users\HB\data_work\Projects\1_Crystallization_I\LS2\7Li_Satrec\1h")
+
 #         # + r'\210722-7Li-LS2-cryst_SEDLT.fid')
-nmr_data = Dataset(Path, 'LS2-1h', 'varian', 4, 1, 4, 20)
+# nmr_data = Dataset(Path, 'Glass', 'varian', 4, 1, 4, 100)
+# Fix that if predefined values are used it doesn't show the dialog for the other functions 4, 0.1, 4, 500
 
 # result = Dataset.respdor_eval(nmr_data, spin = 9/2, fit_lim = 2)
-result  = nmr_data.t1_eval()
+# result  = nmr_data.sae_eval()
+
+# SAE
+Path = (r"C:\Users\HB\data_work\Projects\1_Crystallization_I\LS2\7Li_SAE\20220326-7Li-LS2-glass-SAE.fid")
+nmr_data = Dataset(Path, 'Test', 'varian', 4, 0.1, 4, 500)
+result  = nmr_data.sae_eval(fid=True)
+
+# REDOR
+# Path = (r"C:\Users\HB\sciebo\data\NMR Data Bruker\600MHz SC\nmr\PZABP\12\pdata\1")
+# nmr_data = Dataset(Path, 'AlPO4', 'bruker', 4, 1, 4, 100)
+# result  = nmr_data.redor_eval(spin = 1/2, fit_lim = 0.2)
 
 # M2 = nmr_data.sed_eval(export='zoom', fid=True)
+
+# T1
+# Path = (r"C:\Users\HB\data_work\Projects\1_Crystallization_I\LS2\7Li_Satrec\Cryst3")
+# nmr_data = Dataset(Path, 'Cryst', 'varian', 4, 1, 4, 100)
 # test_var = nmr_data.t1_eval()
 
 # if __name__ == '__main__':
