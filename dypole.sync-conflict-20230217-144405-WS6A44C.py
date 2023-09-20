@@ -137,24 +137,24 @@ class Dataset:
         @input_wrapper
         def left_shift(self, data):
             #Left-shift to FID max for integrative SED evaluation
-            # if self.experiment == 'SED2':
-            #     left_shift = [data[n,:].argmax() for n
-            #                   in range(len(data))]
-            #     data = [ng.proc_base.ls(data[n], left_shift[n]) for n
-            #             in range(len(data))]
-            #     data = np.asarray(data)
-            # else:
-            if self.ls:
-                left_shift = self.ls
+            if self.experiment == 'SED':
+                left_shift = [data[n,:].argmax() for n
+                              in range(len(data))]
+                data = [ng.proc_base.ls(data[n], left_shift[n]) for n
+                        in range(len(data))]
+                data = np.asarray(data)
             else:
-                left_shift = int(
-                    input('Enter number of points to left shift: '))
-            if data.ndim == 1:
-                data = data[left_shift:]
-            else:
-                data = data[:, left_shift:]
-            plt.plot(np.real(data[self.index][0][0:25]))
-            plt.show()
+                if self.ls:
+                    left_shift = self.ls
+                else:
+                    left_shift = int(
+                        input('Enter number of points to left shift: '))
+                if data.ndim == 1:
+                    data = data[left_shift:]
+                else:
+                    data = data[:, left_shift:]
+                plt.plot(np.real(data[self.index][0][0:25]))
+                plt.show()
             return data
 
         @input_wrapper
@@ -432,9 +432,9 @@ class Dataset:
             vdlist = (np.array(
                 self.dic['procpar']['t1Xecho']['values']).astype(float))
         if self.vendor == 'bruker':
-            vdlist = np.array([5, 10,	15,	20,	25,	30,	35,	40,	45,	50,	55,	60,	65,	70,	75,	80,	85,	90,	95,	100,	110,	120,	130,	140,	150,	160,	170,	180,	190,	200,	220,	240,	260,	280,	300,	350,	400,	450,	500,	550,	600,	650,	700,	800,	900,	1000,
-])
-#         vdlist = np.linspace(5, 100, 20)
+            # vdlist = np.array([10, 20, 30, 40, 50, 60, 70, 80, 90, 100, 110, 120, 130, 140, 150,
+            #                   160, 170, 180, 190, 200, 210, 220, 230, 240, 250, 260, 270, 280])
+            vdlist = np.linspace(5, 100, 20)
         # vdlist = vdlist
 
         # time scale (2tau) in ms²
@@ -442,11 +442,7 @@ class Dataset:
 
         # Calculates log(I/I0)
         if fid:
-            if fid == 'custom_int':
-                sed_int = self.custom_int
-            else:
-                sed_int = (np.abs(self.rawdata)).max(axis=1).reshape(len(time))
-                self.fid = 1
+            sed_int = (np.abs(self.rawdata)).max(axis=1).reshape(len(time))
         else:
             self.integrate()
             sed_int = self.area
@@ -524,9 +520,9 @@ class Dataset:
                 # plt.ylim(sed_int[-4]-0.25, 0.025)
             elif export == 'zoom':
                 # plt.xlim(0, time[x_high+10])
-                plt.xlim(0.002, 0.015)
+                plt.xlim(-0.001, 0.041)
                 # plt.ylim(sed_int[x_high]*2, 0.025)
-                plt.ylim(-0.65, 0.23)
+                plt.ylim(-1.5, 0.025)
 
             plt.xlabel(r'(2$\tau$)$^2$ / ms$^2$')
             plt.ylabel(r'ln(I / I$_{0}$)')
@@ -871,7 +867,7 @@ class Dataset:
         # fit_max = np.where(respdor_int > fit_lim)
         fit_max = fit_lim
 
-        # Bessel function bastidores
+        # Bessel function
 
         def sat_rec(xaxis, dip_const):
             """Saturation-Based recoupling curve
@@ -1102,13 +1098,11 @@ def bg_corr(xaxis, yaxis, order, threshold):
 #----------------------------------------------------------------------------#
 
 # SED
-# Path = (r"C:\Users\edwu5ea1\data_work\Projects\1-LNS-crystallization\7Li\Glass-Ceramics\20230828-7Li-x15-70min-SED3.fid")
+Path = (r"C:\Users\HB\data_work\Projects\1_SiO2-Li2O-Nb2O5\7Li_NMR\SED\LNS\20231402-7Li-Li44-SED-1.fid")
 
-# # # #         # + r'\210722-7Li-LS2-cryst_SEDLT.fid')
-# nmr_data = Dataset(Path, 'x-15-0min', 'varian')
-# new_int = np.loadtxt(r'C:\Users\edwu5ea1\data_work\Projects\1-LNS-crystallization\7Li\Glass-Ceramics\0min\area.txt')
-# nmr_data.custom_int = new_int
-# M2 = nmr_data.sed_eval(export='zoom', fid=True)
+# # #         # + r'\210722-7Li-LS2-cryst_SEDLT.fid')
+nmr_data = Dataset(Path, 'LNS44_1', 'varian')
+M2 = nmr_data.sed_eval(export='zoom', fid=True)
 # Fix that if predefined values are used it doesn't show the dialog for the other functions 4, 0.1, 4, 500
 
 # result = Dataset.respdor_eval(nmr_data, spin = 9/2, fit_lim = 2)
@@ -1119,19 +1113,18 @@ def bg_corr(xaxis, yaxis, order, threshold):
 # nmr_data = Dataset(Path, 'cryst-mono', 'varian')
 # result  = nmr_data.sae_eval(fid=True, fit_lim=7)
 
-# # REDOR
-# Path = (r"C:\Users\edwu5ea1\NMR Data\nmr\31P-93Nb-RESPDOR\18\pdata\1")
-# nmr_data = Dataset(Path, 'NbPO5', 'bruker')
-# # nmr_data = Dataset(Path, 'PZAB_AL6', 'bruker')
-# result  = nmr_data.redor_eval(spin = 1/2, fit_lim = 0.2)
+# REDOR
+# Path = (r"C:\Users\HB\sciebo\data\NMR Data Bruker\600MHz SC\nmr\PZABP\10\pdata\1")
+# nmr_data = Dataset(Path, 'PZAB_AL6', 'bruker', 4, 1, 4, 100)
+# result  = nmr_data.redor_eval(spin = 1/2, fit_lim = 0.3)
 
-# RESPDOR
-Path = (r"C:\Users\edwu5ea1\NMR Data\nmr\7Li-93Nb-LNS\21\pdata\1")
-nmr_data = Dataset(Path, 'LiNbO3', 'bruker', 4, 0.5, 4, 50)
+# # RESPDOR
+# Path = (r"C:\Users\edwu5ea1\data_work\600MHz SC\nmr\7Li-93Nb-LNS\3\pdata\1")
+# nmr_data = Dataset(Path, 'Test2', 'bruker', 2, 0.5, 4, 50)
 # new_area = np.loadtxt(r'C:\Users\edwu5ea1\data_work\600MHz SC\nmr\7Li-93Nb-LNS\3\pdata\1\area.txt')
 # nmr_data.area = new_area
 # nmr_data.dic['acqu2s']['TD'] = 28
-result  = nmr_data.respdor_eval(spin = 9/2, fit_lim = 3)
+# result  = nmr_data.respdor_eval(spin = 9/2, fit_lim = 5)
 
 # T1
 # Path = (r"C:\Users\HB\data_work\Projects\1_Crystallization_I\LS2\7Li_Satrec\220602-7Li-LS2-25d_Satrec-static")
