@@ -23,6 +23,7 @@ import re
 import numpy as np
 import scipy.optimize as opt
 import scipy.special as ss
+from scipy.ndimage import median_filter
 import nmrglue as ng
 import matplotlib.pyplot as plt
 import palettable
@@ -136,16 +137,36 @@ class Dataset:
                 return proc_data
             return inner
 
-        def auto_left_shift(data, skip=0):
+        def find_echo_max(mag, window=11, spike_ratio=1.25):
+            '''Returns the position of the FID maximum while ignoring narrow
+            spikes (up to 3 consecutive points at the FID start, 5 elsewhere
+            for window=11). Assumes the echo is broader than the window,
+            since a very narrow echo top cannot be told apart from a spike.
+            '''
+            # Running median: removes narrow spikes, keeps the broad echo
+            med = median_filter(mag, size=(1,) * (mag.ndim - 1) + (window,),
+                                mode='mirror')
+            # The median flattens the echo top, so take the largest point of
+            # the echo-top region that is not a spike (well above its median)
+            top = med >= 0.9 * med.max(axis=-1, keepdims=True)
+            valid = top & (mag <= spike_ratio * med)
+            refined = np.where(valid, mag, -1).argmax(axis=-1)
+            return np.where(valid.any(axis=-1), refined, med.argmax(axis=-1))
+
+        def auto_left_shift(data, skip=0, smooth=False):
             '''Left-shifts every FID to its own maximum (magnitude), discards
             the points before the maximum and appends the same number of
             zeros at the end, so the FID length is preserved. The first
-            'skip' points are ignored when searching for the maximum.
+            'skip' points are ignored when searching for the maximum. With
+            smooth=True, narrow spikes are ignored as well.
             '''
             shifted = np.zeros_like(data)
             # Magnitude is used so the result does not depend on the phase
-            shifts = np.atleast_1d(
-                skip + np.abs(data[..., skip:]).argmax(axis=-1))
+            mag = np.abs(data[..., skip:])
+            if smooth:
+                shifts = np.atleast_1d(skip + find_echo_max(mag))
+            else:
+                shifts = np.atleast_1d(skip + mag.argmax(axis=-1))
             for n, pts in np.ndenumerate(shifts):
                 fid = data[n] if data.ndim > 1 else data
                 out = shifted[n] if data.ndim > 1 else shifted
@@ -158,17 +179,22 @@ class Dataset:
             # Left-shift either by a fixed number of points (truncating the
             # FID) or, with 'auto', each FID to its maximum (zero-filled).
             # 'auto5' (or 'a5', 'auto 5') ignores the first 5 points when
-            # searching for the maximum.
+            # searching for the maximum. 'auto-smooth' (or 'as') ignores
+            # narrow spikes, e.g. at the FID start; 'auto-smooth5' also
+            # skips the first 5 points.
             if self.ls:
                 left_shift = self.ls
             else:
                 left_shift = input('Enter number of points to left shift '
                                    + '(or "a" for auto shift to FID max, '
-                                   + '"a5" to skip the first 5 points): ')
-            auto = re.fullmatch(r'a(?:uto)?[\s:,]*(\d*)',
+                                   + '"a5" to skip the first 5 points, '
+                                   + '"as" to ignore spikes): ')
+            auto = re.fullmatch(r'a(?:uto)?(?:[\s:,-]*(s(?:mooth)?))?'
+                                + r'[\s:,]*(\d*)',
                                 str(left_shift).strip().lower())
             if auto:
-                data = auto_left_shift(data, int(auto.group(1) or 0))
+                data = auto_left_shift(data, int(auto.group(2) or 0),
+                                       smooth=bool(auto.group(1)))
             else:
                 left_shift = int(left_shift)
                 if data.ndim == 1:
