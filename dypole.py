@@ -19,10 +19,12 @@ process2d
 '''
 
 import csv
+import os
 import re
 import numpy as np
 import scipy.optimize as opt
 import scipy.special as ss
+import scipy.stats as st
 from scipy.ndimage import median_filter
 import nmrglue as ng
 import matplotlib.pyplot as plt
@@ -76,6 +78,8 @@ class Dataset:
             artifact if data was acquired digitally and attempting to repair
             2D data from possibly aborted 2D experiments.
         '''
+        # Scans per FID, only read for Varian data
+        self.scans = None
         if self.vendor == 'bruker':
             self.dic, rawdata = ng.bruker.read(self.path)
             if 'acqu2s' in self.dic:
@@ -110,6 +114,11 @@ class Dataset:
 
             self.dic, rawdata = ng.varian.read(self.path)
             self.rawdata = rawdata[0]
+            # Completed scans per FID: an aborted run leaves incomplete or
+            # empty FIDs at the end
+            blocks = ng.varian.read_fid(os.path.join(self.path, 'fid'),
+                                        read_blockhead=True)[0]['blockheader']
+            self.scans = np.array([block['ctcount'] for block in blocks])
             self.car_freq = np.float64(
                 self.dic['procpar']['reffrq1']['values'][0])
             self.spec_width = np.float64(
@@ -456,15 +465,96 @@ class Dataset:
 
     ##### Experiment evaluation #####
 
-    def sed_eval(self, fid=False, export=False):
+    def echo_int(self, tau, start=4, npts=10, skip=2):
+        '''Returns echo-aligned integrated intensities of all FIDs and a mask
+        of the FIDs that can be used.
+
+        The echo top moves through the acquisition window with tau, and on a
+        flat echo top the FID maximum is decided by noise. So the echo
+        position is modelled as a straight line in tau (with the exact
+        slope sw * 1 us when the echo moves 1:1 with tau), and every FID is
+        integrated over the same part of its echo: npts points starting
+        'start' points after its echo top, at fractional positions.
+
+        Parameters
+        ----------
+        tau : numpy array of float
+            Echo delays in us.
+        start : int
+            Points after the echo top where the integration window starts.
+        npts : int
+            Number of points integrated.
+        skip : int
+            Corrupted points at the start of each FID (e.g. a low first
+            point or a spike), ignored when locating the echo and never
+            integrated.
+
+        Returns
+        -------
+        intensity : numpy array of float
+        valid : numpy array of bool
+            False for incomplete FIDs and FIDs whose window would reach into
+            the skipped points.
+        '''
+        data = np.asarray(self.rawdata, dtype=complex)
+        mag = np.abs(data)
+        valid = mag.max(axis=1) > 0
+        if self.scans is not None:
+            valid &= self.scans == self.scans.max()
+        # Echo position: straight line through the FID maxima whose echo
+        # top lies well inside the acquisition window
+        top = skip + mag[:, skip:].argmax(axis=1)
+        inside = valid & (top > skip + 4)
+        if inside.sum() < 2:
+            raise ValueError('Fewer than two FIDs with the echo top inside '
+                             'the acquisition window.')
+        slope, offset = np.polyfit(tau[inside], top[inside], 1)
+        pts_per_us = self.spec_width * 1e-6
+        if abs(slope - pts_per_us) < 0.1 * pts_per_us:
+            slope = pts_per_us
+            offset = np.median(top[inside] - slope * tau[inside])
+        self.echo_pos = offset + slope * tau
+
+        # Phased sum over the integration window (linear interpolation at
+        # fractional positions)
+        window = self.echo_pos[:, None] + start + np.arange(npts)
+        index = np.arange(data.shape[-1])
+        segment = np.array(
+            [np.interp(w, index, fid.real) + 1j * np.interp(w, index, fid.imag)
+             for w, fid in zip(window, data)])
+        phase = np.angle(segment[valid].sum())
+        intensity = np.real(segment * np.exp(-1j * phase)).sum(axis=1)
+        valid &= window[:, 0] >= skip
+
+        print('Echo position (points) = ' + str(np.round(offset, 2)) + ' + '
+              + str(np.round(slope, 4)) + ' * tau/us; integrating points '
+              + str(start) + ' to ' + str(start + npts - 1) + ' after the top')
+        if not valid.all():
+            print('Excluded FIDs (incomplete or window in skipped points): '
+                  + str(np.where(~valid)[0]))
+        return intensity, valid
+
+    def sed_eval(self, fid=False, export=False, fit_range=None,
+                 echo_start=4, echo_npts=10, echo_skip=2):
         '''Returns the homonuclear dipole-dipole second moment of a spin-echo
         decay experiment based in the FID intensities.
 
         Parameters
         ----------
+        fid : bool or string
+            False integrates the processed spectra, True uses the FID
+            maxima, 'custom_int' uses self.custom_int and 'echo' uses
+            echo-aligned integration of the FIDs (see echo_int), which is
+            the most reproducible option for FIDs that start before or on
+            the echo top.
         export : string
             'full', 'zoom', exports SED curve showing either all data points
             or the ones selected for the linear fit + an additional 10.
+        fit_range : tuple of int, optional
+            (first, last) points of the linear fit, as entered at the
+            prompt; last can be None for all points. Skips the prompt.
+        echo_start, echo_npts, echo_skip : int
+            Integration window for fid='echo', see echo_int.
 
         Todo:
             Works only if rawdata contains FIDs - make sure if input is from
@@ -489,7 +579,12 @@ class Dataset:
         time = (((vdlist*1e-3)*2)**2)
 
         # Calculates log(I/I0)
-        if fid:
+        if fid == 'echo':
+            sed_int, valid = self.echo_int(vdlist, echo_start, echo_npts,
+                                           echo_skip)
+            time = time[valid]
+            sed_int = sed_int[valid]
+        elif fid:
             if fid == 'custom_int':
                 sed_int = self.custom_int
             else:
@@ -506,20 +601,25 @@ class Dataset:
             max_index = np.where(np.isinf(sed_int))[0][0]
             time = time[0:max_index]
             sed_int = sed_int[0:max_index]
-        # Plot data
-        plt.scatter(time, sed_int, color='w', edgecolors='k')
-        plt.show()
-
-        # User input loop to select fit range
-        done = 0
-        while done != 1:
-            x_low = int(input('Enter first point in linear fit: '))
-            x_high = int(input('Enter last point in linear fit: '))
+        if fit_range is not None:
+            x_low, x_high = fit_range
             x = time[x_low:x_high]
             y = sed_int[x_low:x_high]
-            plt.scatter(x, y, color='w', edgecolors='k')
+        else:
+            # Plot data
+            plt.scatter(time, sed_int, color='w', edgecolors='k')
             plt.show()
-            done = int(input('Selection OK? 1 - yes, 2 - no: '))
+
+            # User input loop to select fit range
+            done = 0
+            while done != 1:
+                x_low = int(input('Enter first point in linear fit: '))
+                x_high = int(input('Enter last point in linear fit: '))
+                x = time[x_low:x_high]
+                y = sed_int[x_low:x_high]
+                plt.scatter(x, y, color='w', edgecolors='k')
+                plt.show()
+                done = int(input('Selection OK? 1 - yes, 2 - no: '))
 
         # Linear regression analysis
         def fit_func_norm(xaxis, slope, yintercept):
@@ -532,7 +632,7 @@ class Dataset:
         # x0 = -100                    # Initial guess of curvature value
         # sigma = np.ones(fit_max[0][0]) # Std. deviation of y-data
 
-        [popt, _] = (opt.curve_fit(fit_func_norm, x, y))
+        [popt, pcov] = (opt.curve_fit(fit_func_norm, x, y))
 
         # Normalization of data by y-intercept of first linear fit
         sed_int = (np.log(np.exp(sed_int) /
@@ -544,6 +644,9 @@ class Dataset:
 
         # Since time is in ms², the M2 unit is 1e6 rad²s-²
         second_moment = -2*popt2[0]
+        # Standard error of M2 from the fit with free y-intercept (same
+        # slope, but it includes the uncertainty of the intercept)
+        self.m2_err = 2*np.sqrt(pcov[0, 0])
 
         # Exporting data
         if export:
@@ -1146,10 +1249,57 @@ def bg_corr(xaxis, yaxis, order, threshold):
     return back_fun
 
 
+def sed_replicates(paths, vendor='varian', fit_range=(0, None), **kwargs):
+    '''Evaluates repeated SED measurements of one sample with echo-aligned
+    integration and returns M2 with error bars from the repetitions.
+
+    Parameters
+    ----------
+    paths : list of str
+        Paths of the repeated measurements.
+    vendor : str
+        'varian' or 'bruker'.
+    fit_range : tuple of int
+        (first, last) points of the linear fit, used for every run.
+    **kwargs
+        Passed to Dataset.sed_eval, e.g. echo_start, echo_npts, echo_skip.
+
+    Returns
+    -------
+    dict
+        Per-run 'm2' and fit errors 'm2_err', and 'mean', 'sd', 'sem' and
+        'ci95' (half-width of the 95 % confidence interval of the mean),
+        all in 1e6 rad²/s².
+    '''
+    m2, m2_err = [], []
+    for path in paths:
+        data = Dataset(path, os.path.basename(os.path.normpath(path)), vendor)
+        m2.append(data.sed_eval(fid='echo', fit_range=fit_range, **kwargs))
+        m2_err.append(data.m2_err)
+    m2 = np.array(m2)
+    num = len(m2)
+    sd = m2.std(ddof=1) if num > 1 else np.nan
+    sem = sd / np.sqrt(num)
+    ci95 = st.t.ppf(0.975, num - 1) * sem if num > 1 else np.nan
+    for path, value, err in zip(paths, m2, m2_err):
+        print(os.path.basename(os.path.normpath(path)) + ': M2 = '
+              + str(np.round(value, 3)) + ' +- ' + str(np.round(err, 3)))
+    print('Mean M2 = ' + str(np.round(m2.mean(), 3)) + ' +- '
+          + str(np.round(ci95, 3)) + ' (95 % CI), SD = ' + str(np.round(sd, 3))
+          + ', SEM = ' + str(np.round(sem, 3)) + ' e6 rad^2s^-2, n = '
+          + str(num))
+    return {'m2': m2, 'm2_err': np.array(m2_err), 'mean': m2.mean(),
+            'sd': sd, 'sem': sem, 'ci95': ci95}
+
 
 #----------------------------------------------------------------------------#
 
 # SED
+# Echo-aligned integration, recommended when the FIDs start before or on
+# the echo top:
+# M2 = nmr_data.sed_eval(fid='echo', export='zoom')
+# Repeated measurements of one sample, with error bars:
+# result = sed_replicates(glob.glob(r'C:\path\to\data\*precursor*.fid'))
 # Path = (r"C:\Users\edwu5ea1\data_work\Projects\1-LNS-crystallization\7Li\Glass-Ceramics\20230828-7Li-x15-70min-SED3.fid")
 
 # # # #         # + r'\210722-7Li-LS2-cryst_SEDLT.fid')
