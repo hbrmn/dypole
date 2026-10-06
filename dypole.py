@@ -40,7 +40,8 @@ class Dataset:
         self.path = path
         self.name = name
         self.vendor = vendor
-        self.procpar = np.array([ls, trim, zf, lb])
+        # dtype=object so that ls can also be the string 'auto'
+        self.procpar = np.array([ls, trim, zf, lb], dtype=object)
         self.ls = ls
         self.trim = trim
         self.zf = zf
@@ -134,25 +135,38 @@ class Dataset:
                 return proc_data
             return inner
 
+        def auto_left_shift(data):
+            '''Left-shifts every FID to its own maximum (magnitude), discards
+            the points before the maximum and appends the same number of
+            zeros at the end, so the FID length is preserved.
+            '''
+            shifted = np.zeros_like(data)
+            # Magnitude is used so the result does not depend on the phase
+            shifts = np.atleast_1d(np.abs(data).argmax(axis=-1))
+            for n, pts in np.ndenumerate(shifts):
+                fid = data[n] if data.ndim > 1 else data
+                out = shifted[n] if data.ndim > 1 else shifted
+                out[:fid.shape[-1] - pts] = fid[pts:]
+            print('Auto left shift (points per FID): ' + str(shifts.ravel()))
+            return shifted
+
         @input_wrapper
         def left_shift(self, data):
-            #Left-shift to FID max for integrative SED evaluation
-            # if self.experiment == 'SED2':
-            #     left_shift = [data[n,:].argmax() for n
-            #                   in range(len(data))]
-            #     data = [ng.proc_base.ls(data[n], left_shift[n]) for n
-            #             in range(len(data))]
-            #     data = np.asarray(data)
-            # else:
+            # Left-shift either by a fixed number of points (truncating the
+            # FID) or, with 'auto', each FID to its maximum (zero-filled)
             if self.ls:
                 left_shift = self.ls
             else:
-                left_shift = int(
-                    input('Enter number of points to left shift: '))
-            if data.ndim == 1:
-                data = data[left_shift:]
+                left_shift = input('Enter number of points to left shift '
+                                   + '(or "a" for auto shift to FID max): ')
+            if str(left_shift).strip().lower() in ('a', 'auto'):
+                data = auto_left_shift(data)
             else:
-                data = data[:, left_shift:]
+                left_shift = int(left_shift)
+                if data.ndim == 1:
+                    data = data[left_shift:]
+                else:
+                    data = data[:, left_shift:]
             plt.plot(np.real(data[self.index][0][0:25]))
             plt.show()
             return data
