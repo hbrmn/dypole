@@ -19,6 +19,7 @@ process2d
 '''
 
 import csv
+import re
 import numpy as np
 import scipy.optimize as opt
 import scipy.special as ss
@@ -135,14 +136,16 @@ class Dataset:
                 return proc_data
             return inner
 
-        def auto_left_shift(data):
+        def auto_left_shift(data, skip=0):
             '''Left-shifts every FID to its own maximum (magnitude), discards
             the points before the maximum and appends the same number of
-            zeros at the end, so the FID length is preserved.
+            zeros at the end, so the FID length is preserved. The first
+            'skip' points are ignored when searching for the maximum.
             '''
             shifted = np.zeros_like(data)
             # Magnitude is used so the result does not depend on the phase
-            shifts = np.atleast_1d(np.abs(data).argmax(axis=-1))
+            shifts = np.atleast_1d(
+                skip + np.abs(data[..., skip:]).argmax(axis=-1))
             for n, pts in np.ndenumerate(shifts):
                 fid = data[n] if data.ndim > 1 else data
                 out = shifted[n] if data.ndim > 1 else shifted
@@ -153,14 +156,19 @@ class Dataset:
         @input_wrapper
         def left_shift(self, data):
             # Left-shift either by a fixed number of points (truncating the
-            # FID) or, with 'auto', each FID to its maximum (zero-filled)
+            # FID) or, with 'auto', each FID to its maximum (zero-filled).
+            # 'auto5' (or 'a5', 'auto 5') ignores the first 5 points when
+            # searching for the maximum.
             if self.ls:
                 left_shift = self.ls
             else:
                 left_shift = input('Enter number of points to left shift '
-                                   + '(or "a" for auto shift to FID max): ')
-            if str(left_shift).strip().lower() in ('a', 'auto'):
-                data = auto_left_shift(data)
+                                   + '(or "a" for auto shift to FID max, '
+                                   + '"a5" to skip the first 5 points): ')
+            auto = re.fullmatch(r'a(?:uto)?[\s:,]*(\d*)',
+                                str(left_shift).strip().lower())
+            if auto:
+                data = auto_left_shift(data, int(auto.group(1) or 0))
             else:
                 left_shift = int(left_shift)
                 if data.ndim == 1:
