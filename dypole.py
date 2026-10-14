@@ -19,9 +19,13 @@ process2d
 '''
 
 import csv
+import os
+import re
 import numpy as np
 import scipy.optimize as opt
 import scipy.special as ss
+import scipy.stats as st
+from scipy.ndimage import median_filter
 import nmrglue as ng
 import matplotlib.pyplot as plt
 import palettable
@@ -41,7 +45,8 @@ class Dataset:
         self.path = path
         self.name = name
         self.vendor = vendor
-        self.procpar = np.array([ls, trim, zf, lb])
+        # dtype=object so that ls can also be the string 'auto'
+        self.procpar = np.array([ls, trim, zf, lb], dtype=object)
         self.ls = ls
         self.trim = trim
         self.zf = zf
@@ -74,6 +79,8 @@ class Dataset:
             artifact if data was acquired digitally and attempting to repair
             2D data from possibly aborted 2D experiments.
         '''
+        # Scans per FID, only read for Varian data
+        self.scans = None
         if self.vendor == 'bruker':
             self.dic, rawdata = ng.bruker.read(self.path)
             if 'acqu2s' in self.dic:
@@ -108,6 +115,11 @@ class Dataset:
 
             self.dic, rawdata = ng.varian.read(self.path)
             self.rawdata = np.squeeze(rawdata)
+            # Completed scans per FID: an aborted run leaves incomplete or
+            # empty FIDs at the end
+            blocks = ng.varian.read_fid(os.path.join(self.path, 'fid'),
+                                        read_blockhead=True)[0]['blockheader']
+            self.scans = np.array([block['ctcount'] for block in blocks])
             self.car_freq = np.float64(
                 self.dic['procpar']['reffrq']['values'][0])
             self.spec_width = np.float64(
@@ -135,25 +147,70 @@ class Dataset:
                 return proc_data
             return inner
 
+        def find_echo_max(mag, window=11, spike_ratio=1.25):
+            '''Returns the position of the FID maximum while ignoring narrow
+            spikes (up to 3 consecutive points at the FID start, 5 elsewhere
+            for window=11). Assumes the echo is broader than the window,
+            since a very narrow echo top cannot be told apart from a spike.
+            '''
+            # Running median: removes narrow spikes, keeps the broad echo
+            med = median_filter(mag, size=(1,) * (mag.ndim - 1) + (window,),
+                                mode='mirror')
+            # The median flattens the echo top, so take the largest point of
+            # the echo-top region that is not a spike (well above its median)
+            top = med >= 0.9 * med.max(axis=-1, keepdims=True)
+            valid = top & (mag <= spike_ratio * med)
+            refined = np.where(valid, mag, -1).argmax(axis=-1)
+            return np.where(valid.any(axis=-1), refined, med.argmax(axis=-1))
+
+        def auto_left_shift(data, skip=0, smooth=False):
+            '''Left-shifts every FID to its own maximum (magnitude), discards
+            the points before the maximum and appends the same number of
+            zeros at the end, so the FID length is preserved. The first
+            'skip' points are ignored when searching for the maximum. With
+            smooth=True, narrow spikes are ignored as well.
+            '''
+            shifted = np.zeros_like(data)
+            # Magnitude is used so the result does not depend on the phase
+            mag = np.abs(data[..., skip:])
+            if smooth:
+                shifts = np.atleast_1d(skip + find_echo_max(mag))
+            else:
+                shifts = np.atleast_1d(skip + mag.argmax(axis=-1))
+            for n, pts in np.ndenumerate(shifts):
+                fid = data[n] if data.ndim > 1 else data
+                out = shifted[n] if data.ndim > 1 else shifted
+                out[:fid.shape[-1] - pts] = fid[pts:]
+            print('Auto left shift (points per FID): ' + str(shifts.ravel()))
+            return shifted
+
         @input_wrapper
         def left_shift(self, data):
-            #Left-shift to FID max for integrative SED evaluation
-            # if self.experiment == 'SED2':
-            #     left_shift = [data[n,:].argmax() for n
-            #                   in range(len(data))]
-            #     data = [ng.proc_base.ls(data[n], left_shift[n]) for n
-            #             in range(len(data))]
-            #     data = np.asarray(data)
-            # else:
+            # Left-shift either by a fixed number of points (truncating the
+            # FID) or, with 'auto', each FID to its maximum (zero-filled).
+            # 'auto5' (or 'a5', 'auto 5') ignores the first 5 points when
+            # searching for the maximum. 'auto-smooth' (or 'as') ignores
+            # narrow spikes, e.g. at the FID start; 'auto-smooth5' also
+            # skips the first 5 points.
             if self.ls:
                 left_shift = self.ls
             else:
-                left_shift = int(
-                    input('Enter number of points to left shift: '))
-            if data.ndim == 1:
-                data = data[left_shift:]
+                left_shift = input('Enter number of points to left shift '
+                                   + '(or "a" for auto shift to FID max, '
+                                   + '"a5" to skip the first 5 points, '
+                                   + '"as" to ignore spikes): ')
+            auto = re.fullmatch(r'a(?:uto)?(?:[\s:,-]*(s(?:mooth)?))?'
+                                + r'[\s:,]*(\d*)',
+                                str(left_shift).strip().lower())
+            if auto:
+                data = auto_left_shift(data, int(auto.group(2) or 0),
+                                       smooth=bool(auto.group(1)))
             else:
-                data = data[:, left_shift:]
+                left_shift = int(left_shift)
+                if data.ndim == 1:
+                    data = data[left_shift:]
+                else:
+                    data = data[:, left_shift:]
             plt.plot(np.real(data[self.index][0][0:25]))
             plt.show()
             return data
@@ -409,15 +466,96 @@ class Dataset:
 
     ##### Experiment evaluation #####
 
-    def sed_eval(self, fid=False, export=False):
+    def echo_int(self, tau, start=4, npts=10, skip=2):
+        '''Returns echo-aligned integrated intensities of all FIDs and a mask
+        of the FIDs that can be used.
+
+        The echo top moves through the acquisition window with tau, and on a
+        flat echo top the FID maximum is decided by noise. So the echo
+        position is modelled as a straight line in tau (with the exact
+        slope sw * 1 us when the echo moves 1:1 with tau), and every FID is
+        integrated over the same part of its echo: npts points starting
+        'start' points after its echo top, at fractional positions.
+
+        Parameters
+        ----------
+        tau : numpy array of float
+            Echo delays in us.
+        start : int
+            Points after the echo top where the integration window starts.
+        npts : int
+            Number of points integrated.
+        skip : int
+            Corrupted points at the start of each FID (e.g. a low first
+            point or a spike), ignored when locating the echo and never
+            integrated.
+
+        Returns
+        -------
+        intensity : numpy array of float
+        valid : numpy array of bool
+            False for incomplete FIDs and FIDs whose window would reach into
+            the skipped points.
+        '''
+        data = np.asarray(self.rawdata, dtype=complex)
+        mag = np.abs(data)
+        valid = mag.max(axis=1) > 0
+        if self.scans is not None:
+            valid &= self.scans == self.scans.max()
+        # Echo position: straight line through the FID maxima whose echo
+        # top lies well inside the acquisition window
+        top = skip + mag[:, skip:].argmax(axis=1)
+        inside = valid & (top > skip + 4)
+        if inside.sum() < 2:
+            raise ValueError('Fewer than two FIDs with the echo top inside '
+                             'the acquisition window.')
+        slope, offset = np.polyfit(tau[inside], top[inside], 1)
+        pts_per_us = self.spec_width * 1e-6
+        if abs(slope - pts_per_us) < 0.1 * pts_per_us:
+            slope = pts_per_us
+            offset = np.median(top[inside] - slope * tau[inside])
+        self.echo_pos = offset + slope * tau
+
+        # Phased sum over the integration window (linear interpolation at
+        # fractional positions)
+        window = self.echo_pos[:, None] + start + np.arange(npts)
+        index = np.arange(data.shape[-1])
+        segment = np.array(
+            [np.interp(w, index, fid.real) + 1j * np.interp(w, index, fid.imag)
+             for w, fid in zip(window, data)])
+        phase = np.angle(segment[valid].sum())
+        intensity = np.real(segment * np.exp(-1j * phase)).sum(axis=1)
+        valid &= window[:, 0] >= skip
+
+        print('Echo position (points) = ' + str(np.round(offset, 2)) + ' + '
+              + str(np.round(slope, 4)) + ' * tau/us; integrating points '
+              + str(start) + ' to ' + str(start + npts - 1) + ' after the top')
+        if not valid.all():
+            print('Excluded FIDs (incomplete or window in skipped points): '
+                  + str(np.where(~valid)[0]))
+        return intensity, valid
+
+    def sed_eval(self, fid=False, export=False, fit_range=None,
+                 echo_start=4, echo_npts=10, echo_skip=2):
         '''Returns the homonuclear dipole-dipole second moment of a spin-echo
         decay experiment based in the FID intensities.
 
         Parameters
         ----------
+        fid : bool or string
+            False integrates the processed spectra, True uses the FID
+            maxima, 'custom_int' uses self.custom_int and 'echo' uses
+            echo-aligned integration of the FIDs (see echo_int), which is
+            the most reproducible option for FIDs that start before or on
+            the echo top.
         export : string
             'full', 'zoom', exports SED curve showing either all data points
             or the ones selected for the linear fit + an additional 10.
+        fit_range : tuple of int, optional
+            (first, last) points of the linear fit, as entered at the
+            prompt; last can be None for all points. Skips the prompt.
+        echo_start, echo_npts, echo_skip : int
+            Integration window for fid='echo', see echo_int.
 
         Todo:
             Works only if rawdata contains FIDs - make sure if input is from
@@ -442,7 +580,12 @@ class Dataset:
         #time = (((vdlist*1e-3)*2)**2)
         time = (((vdlist*1e-3)*2)**2)
         # Calculates log(I/I0)
-        if fid:
+        if fid == 'echo':
+            sed_int, valid = self.echo_int(vdlist, echo_start, echo_npts,
+                                           echo_skip)
+            time = time[valid]
+            sed_int = sed_int[valid]
+        elif fid:
             if fid == 'custom_int':
                 sed_int = self.custom_int
             else:
@@ -459,20 +602,25 @@ class Dataset:
             max_index = np.where(np.isinf(sed_int))[0][0]
             time = time[0:max_index]
             sed_int = sed_int[0:max_index]
-        # Plot data
-        plt.scatter(time, sed_int, color='w', edgecolors='k')
-        plt.show()
-
-        # User input loop to select fit range
-        done = 0
-        while done != 1:
-            x_low = int(input('Enter first point in linear fit: '))
-            x_high = int(input('Enter last point in linear fit: '))
+        if fit_range is not None:
+            x_low, x_high = fit_range
             x = time[x_low:x_high]
             y = sed_int[x_low:x_high]
-            plt.scatter(x, y, color='w', edgecolors='k')
+        else:
+            # Plot data
+            plt.scatter(time, sed_int, color='w', edgecolors='k')
             plt.show()
-            done = int(input('Selection OK? 1 - yes, 2 - no: '))
+
+            # User input loop to select fit range
+            done = 0
+            while done != 1:
+                x_low = int(input('Enter first point in linear fit: '))
+                x_high = int(input('Enter last point in linear fit: '))
+                x = time[x_low:x_high]
+                y = sed_int[x_low:x_high]
+                plt.scatter(x, y, color='w', edgecolors='k')
+                plt.show()
+                done = int(input('Selection OK? 1 - yes, 2 - no: '))
 
         # Linear regression analysis
         def fit_func_norm(xaxis, slope, yintercept):
@@ -485,7 +633,7 @@ class Dataset:
         # x0 = -100                    # Initial guess of curvature value
         # sigma = np.ones(fit_max[0][0]) # Std. deviation of y-data
 
-        [popt, _] = (opt.curve_fit(fit_func_norm, x, y))
+        [popt, pcov] = (opt.curve_fit(fit_func_norm, x, y))
 
         # Normalization of data by y-intercept of first linear fit
         sed_int = (np.log(np.exp(sed_int) /
@@ -497,6 +645,9 @@ class Dataset:
 
         # Since time is in ms², the M2 unit is 1e6 rad²s-²
         second_moment = -2*popt2[0]
+        # Standard error of M2 from the fit with free y-intercept (same
+        # slope, but it includes the uncertainty of the intercept)
+        self.m2_err = 2*np.sqrt(pcov[0, 0])
 
         # Exporting data
         if export:
@@ -1135,6 +1286,48 @@ def bg_corr(xaxis, yaxis, lam_val, knots):
 
     return baseline
 
+
+def sed_replicates(paths, vendor='varian', fit_range=(0, None), **kwargs):
+    '''Evaluates repeated SED measurements of one sample with echo-aligned
+    integration and returns M2 with error bars from the repetitions.
+
+    Parameters
+    ----------
+    paths : list of str
+        Paths of the repeated measurements.
+    vendor : str
+        'varian' or 'bruker'.
+    fit_range : tuple of int
+        (first, last) points of the linear fit, used for every run.
+    **kwargs
+        Passed to Dataset.sed_eval, e.g. echo_start, echo_npts, echo_skip.
+
+    Returns
+    -------
+    dict
+        Per-run 'm2' and fit errors 'm2_err', and 'mean', 'sd', 'sem' and
+        'ci95' (half-width of the 95 % confidence interval of the mean),
+        all in 1e6 rad²/s².
+    '''
+    m2, m2_err = [], []
+    for path in paths:
+        data = Dataset(path, os.path.basename(os.path.normpath(path)), vendor)
+        m2.append(data.sed_eval(fid='echo', fit_range=fit_range, **kwargs))
+        m2_err.append(data.m2_err)
+    m2 = np.array(m2)
+    num = len(m2)
+    sd = m2.std(ddof=1) if num > 1 else np.nan
+    sem = sd / np.sqrt(num)
+    ci95 = st.t.ppf(0.975, num - 1) * sem if num > 1 else np.nan
+    for path, value, err in zip(paths, m2, m2_err):
+        print(os.path.basename(os.path.normpath(path)) + ': M2 = '
+              + str(np.round(value, 3)) + ' +- ' + str(np.round(err, 3)))
+    print('Mean M2 = ' + str(np.round(m2.mean(), 3)) + ' +- '
+          + str(np.round(ci95, 3)) + ' (95 % CI), SD = ' + str(np.round(sd, 3))
+          + ', SEM = ' + str(np.round(sem, 3)) + ' e6 rad^2s^-2, n = '
+          + str(num))
+    return {'m2': m2, 'm2_err': np.array(m2_err), 'mean': m2.mean(),
+            'sd': sd, 'sem': sem, 'ci95': ci95}
 
 
 #----------------------------------------------------------------------------#
