@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pylint.d/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# OS / sync tools
+desktop.ini
+Thumbs.db
+.DS_Store
+*.sync-conflict-*
+.stfolder/
