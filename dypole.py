@@ -26,6 +26,7 @@ import nmrglue as ng
 import matplotlib.pyplot as plt
 import palettable
 from cycler import cycler
+import pybaselines as pb
 
 
 class Dataset:
@@ -61,7 +62,7 @@ class Dataset:
                titlesize=11, labelsize=11)
         plt.rc('xtick', labelsize=10)
         plt.rc('ytick', labelsize=10)
-        plt.rc('font', **{'family': 'serif', 'serif': ['Times New Roman']})
+        # plt.rc('font', **{'family': 'serif', 'serif': ['Times New Roman']})
 
     def reset(self):
         del self.spec
@@ -106,9 +107,9 @@ class Dataset:
             # binary data.
 
             self.dic, rawdata = ng.varian.read(self.path)
-            self.rawdata = rawdata[0]
+            self.rawdata = np.squeeze(rawdata)
             self.car_freq = np.float64(
-                self.dic['procpar']['reffrq1']['values'][0])
+                self.dic['procpar']['reffrq']['values'][0])
             self.spec_width = np.float64(
                 self.dic['procpar']['sw']['values'][0])
             self.rel_off_freq = (
@@ -226,11 +227,11 @@ class Dataset:
 
         @input_wrapper
         def backcorr(self, spec):
-            poly_degree = int(input('Enter degree of polynomial: '))
-            threshold = float(input('Enter threshold (e.g., 0.02): '))
+            lam_val = float(input('Enter lambda value: (typically between 1e4 - 1e12): '))
+            knots = float(input('Enter number of knots (e.g., 50): '))
 
             spec_corr = [(spec[i] -  bg_corr(self.freq_scale, spec[i],
-                                         poly_degree, threshold))
+                                         lam_val=1e8, knots=50))
                          for i in range(len(spec))]
             spec = np.asarray(spec_corr)
 
@@ -438,8 +439,8 @@ class Dataset:
         # vdlist = vdlist
 
         # time scale (2tau) in ms²
+        #time = (((vdlist*1e-3)*2)**2)
         time = (((vdlist*1e-3)*2)**2)
-
         # Calculates log(I/I0)
         if fid:
             if fid == 'custom_int':
@@ -524,9 +525,9 @@ class Dataset:
                 # plt.ylim(sed_int[-4]-0.25, 0.025)
             elif export == 'zoom':
                 # plt.xlim(0, time[x_high+10])
-                plt.xlim(0.002, 0.015)
+                plt.xlim(0.002, 0.05)
                 # plt.ylim(sed_int[x_high]*2, 0.025)
-                plt.ylim(-0.65, 0.23)
+                plt.ylim(-0.1, 0.0)
 
             plt.xlabel(r'(2$\tau$)$^2$ / ms$^2$')
             plt.ylabel(r'ln(I / I$_{0}$)')
@@ -553,7 +554,7 @@ class Dataset:
 
         if self.vendor == 'varian':
             vdlist = (np.array(
-                self.dic['procpar']['d2']['values']).astype(float))
+                self.dic['procpar']['d1']['values']).astype(float))
 
         if fit_lim == False:
             fit_lim = 0
@@ -562,7 +563,7 @@ class Dataset:
         time = vdlist[0:len(t1_int)-fit_lim]
 
         # normalized intensities
-        t1_int = self.area/np.max(self.area)
+        t1_int = t1_int/np.max(t1_int)
         t1_int = t1_int[0:len(t1_int)-fit_lim]
 
         # Plot data
@@ -1025,12 +1026,91 @@ class Dataset:
 
         return second_moment
 
+    def drenar_eval(self, spin=False, fit_lim=False):
+        """Returns the homonuclear second moment value of a CT-DRENAR experiment
+        and exports the deltaS/S0 data set together with a fit to the data.
+
+        Parameters
+        ----------
+
+        Returns
+        -------
+        TYPE
+            DESCRIPTION.
+
+        """
+        self.experiment = 'DRENAR'
+
+        self.fit_lim = fit_lim
+
+        self.integrate()
+
+        if self.vendor == 'bruker':
+            spin_rate = self.dic['acqus']['CNST'][31]
+        elif self.vendor == 'varian':
+            spin_rate = self.dic['procpar']['srate']['values'][0]
+
+        # Number of points in F1 dimension
+        number_indirect_points = self.dic['acqu2s']['TD']
+        center_point = int(number_indirect_points/2)
+        # The theta axis is made up of 11 points going from 0 to 180 degrees in 18 degree steps
+        theta_axis = np.arange(0, 180.1, 18)
+
+        drenar_int = np.round((self.area[center_point]-self.area)
+                                / self.area[center_point], decimals=4)  # calc DS
+
+        loop_increment = (self.dic['acqus']['L'][0])
+
+        # Builds the time scale in s
+        drenar_ntr = (loop_increment * 16 * (1 / spin_rate))
+        # Below is a shorter way to write the redor_ntr variable
+
+        # DRENAR analysis via parabolic function after Ren et al.
+
+        def fit_func(theta_axis, const):
+            return (6/5) * (const * drenar_ntr)**2 * (1 + np.cos(np.radians(2*theta_axis)))
+
+        # Initial guess of curvature value
+        x0 = 10
+
+        [res1, res2] = (opt.curve_fit(fit_func,
+                                        theta_axis,
+                                        drenar_int, x0))
+
+        # Since drenar_ntr is in ms, the M2 unit is 1e6 rad²s-²
+        second_moment = res1**2
+
+        # Exporting data
+        self.export(theta_axis, drenar_int, 'theta / °', 'DS/S0', 'DRENAR')
+
+        scale = np.round(np.linspace(theta_axis[0], theta_axis[-1], 1001),
+                         decimals=4)
+        fit = fit_func(scale, res1)
+
+        result = ('M2 = ' + str(np.round(second_moment, decimals=4))
+                  + ' rad^2 s^-2')
+
+        self.export(scale, fit, '$\theta$ / °', 'DS/S0', 'Fit', result)
+
+        # Creating and saving DRENAR plot
+        fig = plt.figure(figsize=(self.fig_width, self.fig_height))
+
+        plt.scatter(theta_axis, drenar_int, color='w', edgecolor='k')
+        plt.plot(scale, fit_func(scale, res1), '--', color='k')
+
+        plt.xlabel(r'$\theta$ / °')
+        plt.ylabel(r'$\Delta$S / S$_0$')
+        plt.ylim(-0.05, 1.2)
+        fig.savefig(self.path + '\\' + self.name + '_DRENAR.png',
+                    format='png', dpi=300, bbox_inches='tight')
+
+        return second_moment
+
 ##### Global Functions #####
 
 # Background correction
 
-
-def bg_corr(xaxis, yaxis, order, threshold):
+def bg_corr(xaxis, yaxis, lam_val, knots):
     '''Returns the background corrected spectrum of the input data.
 
     Parameters
@@ -1039,11 +1119,10 @@ def bg_corr(xaxis, yaxis, order, threshold):
         x axis
     yaxis : float
         y axis
-    order : int
-        order of the polynomioal function
-    threshold : float
-        Noise threshold to differentiate signals from noise.
-        Values typically range from 0.1 to 0.0001
+    lam_val : float
+        Test
+    knots : int
+        Number of nodes
 
     Returns
     -------
@@ -1051,61 +1130,29 @@ def bg_corr(xaxis, yaxis, order, threshold):
     contains the background corrected dataset
 
     '''
+    baseline_fitter = pb.Baseline(xaxis)
+    baseline, params = baseline_fitter.mixture_model(yaxis, lam=lam_val, num_knots=knots)
 
-    # Rescaling the data
-    num_points = len(xaxis)
-    i = np.argsort(xaxis)
-
-    yaxis = yaxis[i]
-    maxy = np.max(yaxis)
-    dely = (maxy-np.min(yaxis))/2
-    num_points_corr = (2 * (xaxis[:] - xaxis[num_points-1])
-                       / (xaxis[num_points-1]-xaxis[0]) + 1)
-
-    yaxis = (yaxis[:] - maxy) / dely + 1
-    # Creating Vandermonde matrix
-    const_p = np.arange(0, order+1, 1)
-    # np.tile repeats arrays num_points_corr and const_p
-    var_t = np.tile(num_points_corr,
-                    (order+1, 1)).T ** np.tile(const_p, (num_points, 1))
-    # analog to MATLAB's pins function
-    tinv = np.linalg.pinv(np.matmul(var_t.T, var_t))
-    tinv = np.matmul(tinv, var_t.T)
-    # Initialisation (least-squares estimation)
-    aux = np.matmul(tinv, yaxis)
-    back_fun = np.matmul(var_t, aux)
-    # Other variables
-    alpha = 0.99 * 0.5
-    it = 0
-    zp = np.ones(num_points)
-
-    # Fitting loop
-    while (np.sum((back_fun-zp))**2)/(np.sum((zp))**2) > (1e-09):
-        it += 1  # Iteration
-        zp = back_fun  # Previous estimation
-        res = yaxis - back_fun  # Residual
-        # Add different functions atq, sh etc. here
-        d = ((res*(2*alpha-1))*((res < threshold)*1)
-             + (alpha*2*threshold-res) * ((res >= threshold)*1))
-        aux = np.matmul(tinv, (yaxis+d))  # Polynomial coefficients a
-        back_fun = np.matmul(var_t, aux)  # Polynomial
-
-    # Rescaling
-    j = np.argsort(i)
-    back_fun = (back_fun[j]-1) * dely + maxy
-    aux[1] = aux[1]-1
-    aux = aux * dely
-    return back_fun
+    return baseline
 
 
 
 #----------------------------------------------------------------------------#
 
 # SED
-# Path = (r"C:\Users\edwu5ea1\data_work\Projects\1-LNS-crystallization\7Li\Glass-Ceramics\20230828-7Li-x15-70min-SED3.fid")
+Path = (r"/home/henrik/Desktop/Andre/7Li/26-07-28-7Li-JV-Sodalime-IOX-Lavado-SED--80C.fid/")
+nmr_data = Dataset(Path, "test", "varian")#, 2, 0.1, 2, 200)
+M2 = nmr_data.sed_eval(export='zoom', fid=False)
+print(M2)
+
+# # DRENAR
+# Path = (r'C:\Users\edwu5ea1\data_work\NMR Data\600MHz SC\nmr\PBG-CT-DRENAR\6\pdata\1')
+# nmr_data = Dataset(Path, 'Na3P5O10', 'bruker', 2, 0.4, 2, 50)
+# # # nmr_data = Dataset(Path, 'Na3P5O10', 'bruker')
+# result  = nmr_data.drenar_eval()
 
 # # # #         # + r'\210722-7Li-LS2-cryst_SEDLT.fid')
-# nmr_data = Dataset(Path, 'x-15-0min', 'varian')
+# nmr_data = Dataset(Path, '2h_2', 'varian')
 # new_int = np.loadtxt(r'C:\Users\edwu5ea1\data_work\Projects\1-LNS-crystallization\7Li\Glass-Ceramics\0min\area.txt')
 # nmr_data.custom_int = new_int
 # M2 = nmr_data.sed_eval(export='zoom', fid=True)
@@ -1120,23 +1167,24 @@ def bg_corr(xaxis, yaxis, order, threshold):
 # result  = nmr_data.sae_eval(fid=True, fit_lim=7)
 
 # # REDOR
-# Path = (r"C:\Users\edwu5ea1\NMR Data\nmr\31P-93Nb-RESPDOR\18\pdata\1")
-# nmr_data = Dataset(Path, 'NbPO5', 'bruker')
+# Path = (r"C:\Users\HB\data_work\NMR Data\600MHz_recent\nmr\Mojtaba\22\pdata\1")
+# nmr_data = Dataset(Path, '148D_B4', 'bruker')
 # # nmr_data = Dataset(Path, 'PZAB_AL6', 'bruker')
-# result  = nmr_data.redor_eval(spin = 1/2, fit_lim = 0.2)
+# result  = nmr_data.redor_eval(spin = 5/2, fit_lim = 0.01)
 
 # RESPDOR
-Path = (r"C:\Users\edwu5ea1\NMR Data\nmr\7Li-93Nb-LNS\21\pdata\1")
-nmr_data = Dataset(Path, 'LiNbO3', 'bruker', 4, 0.5, 4, 50)
-# new_area = np.loadtxt(r'C:\Users\edwu5ea1\data_work\600MHz SC\nmr\7Li-93Nb-LNS\3\pdata\1\area.txt')
+# Path = (r"C:\Users\edwu5ea1\data_work\NMR Data\600MHz_recent\nmr\31P-93Nb-RESPDOR\47\pdata\1")
+# nmr_data = Dataset(Path, '20Nb_B4', 'bruker', 4, 0.6, 2, 100)
+# new_area = np.loadtxt(r'C:\Users\edwu5ea1\data_work\NMR Data\600MHz SC\nmr\7Li-93Nb-LNS\17\pdata\1\area.txt')
 # nmr_data.area = new_area
-# nmr_data.dic['acqu2s']['TD'] = 28
-result  = nmr_data.respdor_eval(spin = 9/2, fit_lim = 3)
+# nmr_data.dic['acqu2s']['TD'] = 20
+# result  = nmr_data.respdor_eval(spin = 9/2, fit_lim = 5)
 
 # T1
-# Path = (r"C:\Users\HB\data_work\Projects\1_Crystallization_I\LS2\7Li_Satrec\220602-7Li-LS2-25d_Satrec-static")
-# nmr_data = Dataset(Path, '10d-biexp', 'varian', 4, 1, 4, 100)
-# test_var = nmr_data.t1_eval()
+# Path = (r"/home/henrik/Desktop/20260204-29Si-0106-d1opt.fid")
+# nmr_data = Dataset(Path, 'x2.5', 'varian')
+# test_var = nmr_data.t1_eval()#fid=True)
+# print(test_var)
 
 # T1rho
 # Path = (r"C:\Users\HB\sciebo\data\NMR Data Bruker\600MHz SC\nmr\7Li_LS2-spinlock\18\pdata\1")
