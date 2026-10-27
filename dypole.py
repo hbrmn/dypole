@@ -113,7 +113,10 @@ class Dataset:
             # binary data.
 
             self.dic, rawdata = ng.varian.read(self.path)
-            self.rawdata = rawdata[0]
+            # One row per FID, whether nmrglue returns (1, n, np) or (n, np)
+            if rawdata.ndim > 1:
+                rawdata = rawdata.reshape(-1, rawdata.shape[-1])
+            self.rawdata = rawdata
             # Completed scans per FID: an aborted run leaves incomplete or
             # empty FIDs at the end
             blocks = ng.varian.read_fid(os.path.join(self.path, 'fid'),
@@ -465,16 +468,18 @@ class Dataset:
 
     ##### Experiment evaluation #####
 
-    def echo_int(self, tau, start=4, npts=10, skip=2):
+    def echo_int(self, tau, start=4, npts=10, skip=2, tau2=None,
+                 offset=None):
         '''Returns echo-aligned integrated intensities of all FIDs and a mask
         of the FIDs that can be used.
 
-        The echo top moves through the acquisition window with tau, and on a
-        flat echo top the FID maximum is decided by noise. So the echo
-        position is modelled as a straight line in tau (with the exact
-        slope sw * 1 us when the echo moves 1:1 with tau), and every FID is
-        integrated over the same part of its echo: npts points starting
-        'start' points after its echo top, at fractional positions.
+        On a flat echo top the FID maximum is decided by noise. So the echo
+        position is modelled from the pulse timing: for a Hahn echo with
+        delays tau (before the refocusing pulse) and tau2 (after it, before
+        acquisition) the echo top lies at offset + sw * 1 us * (tau - tau2)
+        points. Every FID is integrated over the same part of its echo: npts
+        points starting 'start' points after its echo top, at fractional
+        positions.
 
         Parameters
         ----------
@@ -488,6 +493,14 @@ class Dataset:
             Corrupted points at the start of each FID (e.g. a low first
             point or a spike), ignored when locating the echo and never
             integrated.
+        tau2 : numpy array of float, optional
+            Delays between refocusing pulse and acquisition in us (Varian
+            t2Xecho). None treats it as constant.
+        offset : float, optional
+            Echo-top position in points for tau = tau2. Determined from the
+            data if the echo moves through the acquisition window; required
+            if it does not (e.g. tau2 = tau, acquisition starting at the
+            echo). The value used is stored in self.echo_offset.
 
         Returns
         -------
@@ -501,19 +514,26 @@ class Dataset:
         valid = mag.max(axis=1) > 0
         if self.scans is not None:
             valid &= self.scans == self.scans.max()
-        # Echo position: straight line through the FID maxima whose echo
-        # top lies well inside the acquisition window
-        top = skip + mag[:, skip:].argmax(axis=1)
-        inside = valid & (top > skip + 4)
-        if inside.sum() < 2:
-            raise ValueError('Fewer than two FIDs with the echo top inside '
-                             'the acquisition window.')
-        slope, offset = np.polyfit(tau[inside], top[inside], 1)
+        shift = tau - (0 if tau2 is None else tau2)
         pts_per_us = self.spec_width * 1e-6
-        if abs(slope - pts_per_us) < 0.1 * pts_per_us:
-            slope = pts_per_us
-            offset = np.median(top[inside] - slope * tau[inside])
-        self.echo_pos = offset + slope * tau
+        slope = pts_per_us
+        if offset is None:
+            # Straight line through the FID maxima whose echo top lies well
+            # inside the acquisition window
+            top = skip + mag[:, skip:].argmax(axis=1)
+            inside = valid & (top > skip + 4)
+            if inside.sum() < 2 or np.ptp(shift[inside]) == 0:
+                raise ValueError('The echo does not move through the '
+                                 'acquisition window: pass its position as '
+                                 'offset (e.g. echo_offset of a series in '
+                                 'which it moves).')
+            fit_slope, offset = np.polyfit(shift[inside], top[inside], 1)
+            if abs(fit_slope - pts_per_us) < 0.1 * pts_per_us:
+                offset = np.median(top[inside] - slope * shift[inside])
+            else:
+                slope = fit_slope
+        self.echo_offset = offset
+        self.echo_pos = offset + slope * shift
 
         # Phased sum over the integration window (linear interpolation at
         # fractional positions)
@@ -527,15 +547,28 @@ class Dataset:
         valid &= window[:, 0] >= skip
 
         print('Echo position (points) = ' + str(np.round(offset, 2)) + ' + '
-              + str(np.round(slope, 4)) + ' * tau/us; integrating points '
-              + str(start) + ' to ' + str(start + npts - 1) + ' after the top')
+              + str(np.round(slope, 4)) + ' * (tau - tau2)/us; integrating '
+              + 'points ' + str(start) + ' to ' + str(start + npts - 1)
+              + ' after the top')
         if not valid.all():
             print('Excluded FIDs (incomplete or window in skipped points): '
                   + str(np.where(~valid)[0]))
         return intensity, valid
 
+    def echo_delays(self):
+        '''Returns the Hahn-echo delays tau and tau2 in us (Varian t1Xecho
+        and t2Xecho, tau2 None if not available).'''
+        pp = self.dic['procpar']
+        tau = np.array(pp['t1Xecho']['values']).astype(float)
+        tau2 = None
+        if 't2Xecho' in pp:
+            tau2 = np.array(pp['t2Xecho']['values']).astype(float)
+            if len(tau2) == 1:
+                tau2 = np.full(len(tau), tau2[0])
+        return tau, tau2
+
     def sed_eval(self, fid=False, export=False, fit_range=None,
-                 echo_start=4, echo_npts=10, echo_skip=2):
+                 echo_start=4, echo_npts=10, echo_skip=2, echo_offset=None):
         '''Returns the homonuclear dipole-dipole second moment of a spin-echo
         decay experiment based in the FID intensities.
 
@@ -555,6 +588,9 @@ class Dataset:
             prompt; last can be None for all points. Skips the prompt.
         echo_start, echo_npts, echo_skip : int
             Integration window for fid='echo', see echo_int.
+        echo_offset : float, optional
+            Echo-top position for fid='echo', see echo_int. Needed when the
+            echo does not move through the acquisition window.
 
         Todo:
             Works only if rawdata contains FIDs - make sure if input is from
@@ -580,8 +616,9 @@ class Dataset:
 
         # Calculates log(I/I0)
         if fid == 'echo':
+            tau2 = self.echo_delays()[1] if self.vendor == 'varian' else None
             sed_int, valid = self.echo_int(vdlist, echo_start, echo_npts,
-                                           echo_skip)
+                                           echo_skip, tau2, echo_offset)
             time = time[valid]
             sed_int = sed_int[valid]
         elif fid:
@@ -1292,6 +1329,118 @@ def sed_replicates(paths, vendor='varian', fit_range=(0, None), **kwargs):
             'sd': sd, 'sem': sem, 'ci95': ci95}
 
 
+def sed_stitch(paths, ref_tau=20, offset=None, start=4, npts=10, skip=2,
+               gauss_max=100):
+    '''Stitches Varian Hahn-echo SED series of one sample, measured with
+    different echo-delay lists, into one decay curve.
+
+    Every series is evaluated with echo-aligned integration (see
+    Dataset.echo_int) and normalised to its own point at tau = ref_tau, which
+    therefore has to be part of every series. Series in which the echo
+    moves through the acquisition window (t2Xecho fixed) determine the echo
+    offset that is also used for series acquired from the echo top
+    (t2Xecho = t1Xecho).
+
+    Parameters
+    ----------
+    paths : list of str
+        All series of one sample.
+    ref_tau : float
+        Echo delay in us used for normalisation.
+    offset : float, optional
+        Echo-top position in points for t1Xecho = t2Xecho; by default the
+        median over the series in which the echo moves.
+    start, npts, skip : int
+        Integration window, see Dataset.echo_int.
+    gauss_max : float
+        Largest tau in us of the initial (Gaussian) decay used for M2.
+
+    Returns
+    -------
+    dict
+        'series': per series name, tau, ln(I/I_ref) and, where possible,
+        its initial M2 ('m2', 'm2_err') or compressed-exponential T and beta;
+        'tau', 'mean', 'sem', 'n': stitched curve (mean over series);
+        'm2', 'm2_err': Gaussian fit of the stitched curve up to gauss_max;
+        'T', 'beta' (+ '_err'): fit of ln I = a - (2 tau / T)^beta over the
+        whole stitched curve, T in ms; 'offset': echo offset used.
+        M2 in 1e6 rad²/s².
+    '''
+    data_sets = [Dataset(path, os.path.basename(os.path.normpath(path)),
+                         'varian') for path in paths]
+    if offset is None:
+        offsets = []
+        for data in data_sets:
+            tau, tau2 = data.echo_delays()
+            try:
+                data.echo_int(tau, start, npts, skip, tau2)
+                offsets.append(data.echo_offset)
+            except ValueError:
+                pass
+        if not offsets:
+            raise ValueError('No series in which the echo moves through the '
+                             'acquisition window: pass offset.')
+        offset = np.median(offsets)
+
+    def gauss(x, a, m2):
+        return a - m2 / 2 * x**2
+
+    def comp_exp(x, a, T, beta):
+        return a - (x / T)**beta
+
+    series = []
+    for data in data_sets:
+        tau, tau2 = data.echo_delays()
+        intensity, valid = data.echo_int(tau, start, npts, skip, tau2, offset)
+        ref = valid & (tau == ref_tau)
+        if not ref.any():
+            raise ValueError(data.name + ' has no valid point at tau = '
+                             + str(ref_tau) + ' us.')
+        entry = {'name': data.name, 'tau': tau[valid],
+                 'ln': np.log(intensity[valid] / intensity[ref][0])}
+        x = 2 * entry['tau'] * 1e-3                 # 2 tau in ms
+        short = entry['tau'] <= gauss_max
+        if short.sum() >= 5:
+            popt, pcov = opt.curve_fit(gauss, x[short], entry['ln'][short])
+            entry['m2'], entry['m2_err'] = popt[1], np.sqrt(pcov[1, 1])
+        if len(x) >= 4 and (~short).any():
+            popt, _ = opt.curve_fit(comp_exp, x, entry['ln'], p0=[0, 2, 1.3],
+                                    maxfev=20000)
+            entry['T'], entry['beta'] = popt[1], popt[2]
+        series.append(entry)
+
+    taus = np.unique(np.concatenate([s['tau'] for s in series]))
+    values = [[s['ln'][s['tau'] == t][0] for s in series if (s['tau'] == t).any()]
+              for t in taus]
+    mean = np.array([np.mean(v) for v in values])
+    num = np.array([len(v) for v in values])
+    sem = np.array([np.std(v, ddof=1) / np.sqrt(len(v)) if len(v) > 1
+                    else np.nan for v in values])
+    # Points from a single series get the median uncertainty as weight
+    sigma = np.where(np.isfinite(sem) & (sem > 0), sem, np.nanmedian(sem[sem > 0]))
+    x = 2 * taus * 1e-3
+    result = {'series': series, 'tau': taus, 'mean': mean, 'sem': sem,
+              'n': num, 'offset': offset}
+    short = taus <= gauss_max
+    popt, pcov = opt.curve_fit(gauss, x[short], mean[short], sigma=sigma[short])
+    result['m2'], result['m2_err'] = popt[1], np.sqrt(pcov[1, 1])
+    if (~short).any() and len(x) >= 4:
+        popt, pcov = opt.curve_fit(comp_exp, x, mean, p0=[0, 2, 1.3],
+                                   sigma=sigma, maxfev=20000)
+        result['T'], result['beta'] = popt[1], popt[2]
+        result['T_err'], result['beta_err'] = np.sqrt(np.diag(pcov))[1:]
+
+    print('Stitched ' + str(len(series)) + ' series, echo offset '
+          + str(np.round(offset, 2)) + ' points; initial M2 = '
+          + str(np.round(result['m2'], 3)) + ' +- '
+          + str(np.round(result['m2_err'], 3)) + ' e6 rad^2s^-2 (tau <= '
+          + str(gauss_max) + ' us)')
+    if 'T' in result:
+        print('Compressed exponential: T = ' + str(np.round(result['T'], 4))
+              + ' ms, beta = ' + str(np.round(result['beta'], 4)))
+    return result
+
+
 #----------------------------------------------------------------------------#
 
 # SED
@@ -1300,6 +1449,9 @@ def sed_replicates(paths, vendor='varian', fit_range=(0, None), **kwargs):
 # M2 = nmr_data.sed_eval(fid='echo', export='zoom')
 # Repeated measurements of one sample, with error bars:
 # result = sed_replicates(glob.glob(r'C:\path\to\data\*precursor*.fid'))
+# Series with different tau lists (all containing tau = 20 us) of one sample,
+# stitched into one decay curve:
+# curve = sed_stitch(glob.glob(r'C:\path\to\data\*precursor*.fid'))
 # Path = (r"C:\Users\edwu5ea1\data_work\Projects\1-LNS-crystallization\7Li\Glass-Ceramics\20230828-7Li-x15-70min-SED3.fid")
 
 # # # #         # + r'\210722-7Li-LS2-cryst_SEDLT.fid')
