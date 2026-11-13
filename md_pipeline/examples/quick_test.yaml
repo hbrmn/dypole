@@ -18,7 +18,8 @@ simulation:
     - {type: minimize}
     - {type: relax, T: 300, time_ps: 1}
     - {type: equilibrate, T: 4000, time_ps: 5, ensemble: nvt, name: melt}
-    - {type: ramp, T_start: 4000, T_end: 300, rate_K_per_ps: 500, ensemble: npt, P_bar: 0, name: quench}
+    - {type: ramp, T_start: 4000, T_end: 2000, rate_K_per_ps: 500, ensemble: nvt, name: quench_nvt}
+    - {type: ramp, T_start: 2000, T_end: 300, rate_K_per_ps: 500, ensemble: npt, P_bar: 0, name: quench_npt}
     - {type: equilibrate, T: 300, time_ps: 2, ensemble: npt, P_bar: 0}
     - {type: production, T: 300, time_ps: 5, ensemble: nvt, dump_every_ps: 0.1}
 analysis:

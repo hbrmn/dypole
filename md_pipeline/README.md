@@ -190,7 +190,8 @@ stages:
   - {type: relax, T: 300, time_ps: 5}                  # nve/limit + Langevin: remove bad contacts safely
   - {type: ramp, T_start: 300, T_end: 4000, rate_K_per_ps: 100, ensemble: nvt}
   - {type: equilibrate, T: 4000, time_ps: 100, ensemble: nvt, name: melt}       # lose memory of the start
-  - {type: ramp, T_start: 4000, T_end: 300, rate_K_per_ps: 1, ensemble: npt, P_bar: 0, name: quench}
+  - {type: ramp, T_start: 4000, T_end: 2000, rate_K_per_ps: 1, ensemble: nvt, name: quench_nvt}   # hot: fixed volume
+  - {type: ramp, T_start: 2000, T_end: 300, rate_K_per_ps: 1, ensemble: npt, P_bar: 0, name: quench_npt}
   - {type: equilibrate, T: 300, time_ps: 100, ensemble: npt, P_bar: 0}          # density relaxes
   - {type: production, T: 300, time_ps: 100, ensemble: nvt, dump_every_ps: 1}   # the analysed run
 ```
@@ -213,8 +214,25 @@ The **production** stage additionally:
 * **Quench rate:** 1 K/ps is a common compromise. Faster quenches give a
   "hotter" glass: higher fictive temperature, more defects and broader Qn
   distributions. Make the rate a series parameter if your property is sensitive to it.
-* **NPT during the quench and relaxation** lets the density emerge from the
-  model. Compare it to experiment; this is your first validation.
+* **NPT below ~2000 K** lets the density emerge from the model. Compare it to
+  experiment; this is your first validation. **Do not run NPT at P = 0 in the
+  hot liquid:** with Pedone, an NS2 melt at 4000 K expands to 1.0–1.4 g/cm³
+  (less than half the glass density) and can even cavitate. Keep the hot part
+  in NVT at the experimental density.
+
+**Which potential?** For alkali silicates, the common choices are:
+* **Pedone (2006)** (`potentials/pedone.yaml`): Morse + r⁻¹² with partial charges
+  and Ewald/PPPM. Transferable to Li, Na, K, Mg, Ca, Al, P… and a good default
+  for structure and for comparisons across a series.
+* **SHIK** (Sundararaman, Huang, Ispas, Kob, 2018–2020): Buckingham + r⁻²⁴
+  with Wolf-truncated Coulomb (no Ewald, so faster). Fitted for alkali
+  (alumino)silicates; very good densities and elastic properties across
+  composition. The O charge depends on composition to keep the box neutral,
+  which needs a small extension of `builder.py`.
+* **Teter / Du & Cormack**: Buckingham with partial charges, widely used for
+  sodium silicates. Needs a repulsive correction at short range for hot melts.
+* **Machine-learned potentials** (DeePMD, ACE, MACE…): near-DFT accuracy but
+  10–100× slower. Good for validating a classical potential on one composition.
 * **Timestep:** 1 fs is safe for oxides with these potentials.
 
 To add a new kind of stage (e.g. a pressure quench or a high-T diffusion
@@ -324,6 +342,11 @@ cd md_pipeline
 # 1) smoke test: tiny boxes, short runs (~3 min), checks the whole chain
 python pipeline.py examples/quick_test.yaml all
 python pipeline.py examples/quick_test.yaml status
+```
+
+```bash
+# 1b) a small real example: Na2O.2SiO2 glass, 450 atoms, ~4 min on 4 cores
+python pipeline.py examples/sodium_silicate_quick.yaml all
 ```
 
 ```bash

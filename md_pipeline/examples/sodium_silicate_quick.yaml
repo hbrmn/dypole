@@ -1,0 +1,53 @@
+# Quick example: sodium disilicate glass Na2O.2SiO2 (NS2), 450 atoms,
+# Pedone potential, melt-quench at 25 K/ps. Runs in ~3-4 min on 4 cores.
+# Small box + fast quench: good for learning, not for publication numbers.
+#
+# Protocol note: at 4000 K and P = 0 the Pedone liquid expands to < 1.5 g/cm3.
+# So the hot part runs in NVT at the experimental density, and NPT is only
+# switched on below 2000 K, where the density can relax safely.
+project: {name: NS2_quick, output_dir: ../runs_NS2_quick, seed: 42}
+
+compositions:
+  list:
+    - name: NS2
+      x: 0.3333               # mole fraction Na2O
+      oxides: {Na2O: 1, SiO2: 2}
+      density: 2.49           # experimental NS2 glass density, g/cm3 (start value)
+  # For a series, use instead:
+  # series:
+  #   name: "NS_x{x:.2f}"
+  #   label: "x in xNa2O-(1-x)SiO2"
+  #   values: [0.15, 0.20, 0.25, 0.33, 0.40]
+  #   oxides: {Na2O: "x", SiO2: "1 - x"}
+  #   density: [[0.0, 2.20], [0.20, 2.38], [0.33, 2.49], [0.40, 2.53]]
+
+system: {target_atoms: 450, min_distance: 1.6, replicas: 1}
+potential: ../potentials/pedone.yaml
+
+lammps: {command: lmp, mpi_ranks: 4, mpi_launcher: "mpirun -np {n}", run_mode: local}
+
+simulation:
+  timestep_fs: 1.0
+  thermo_every: 1000
+  stages:
+    - {type: minimize}
+    - {type: relax, T: 300, time_ps: 1}
+    - {type: equilibrate, T: 4000, time_ps: 10, ensemble: nvt, name: melt}
+    - {type: ramp, T_start: 4000, T_end: 2000, rate_K_per_ps: 25, ensemble: nvt, name: quench_nvt}
+    - {type: ramp, T_start: 2000, T_end: 300, rate_K_per_ps: 25, ensemble: npt, P_bar: 0, name: quench_npt}
+    - {type: equilibrate, T: 300, time_ps: 10, ensemble: npt, P_bar: 0, name: relax_300K}
+    - {type: production, T: 300, time_ps: 10, ensemble: nvt, dump_every_ps: 0.1}
+
+analysis:
+  r_max: 7.0                  # box is ~18 A, so r_max must stay below ~9 A
+  dr: 0.02
+  coordination:
+    pairs: [Si-O, Na-O, O-Si, O-Na]
+    cutoffs: {Si-O: 2.0}      # Na-O: automatic (first minimum of g(r))
+  qn: {formers: [Si]}
+  bond_angles: [O-Si-O, Si-O-Si]
+  msd: true
+  nmr_m2:
+    - {observe: 23Na, partner: 23Na}
+    - {observe: 29Si, partner: 23Na}
+  isotope_table: ../../IsotopeProperties
