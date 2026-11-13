@@ -1,0 +1,45 @@
+# Pedone et al., J. Phys. Chem. B 110 (2006) 11780-11795.
+# Partial-charge potential for oxide glasses:
+#   U(r) = qi qj e^2/r + D0 [ (1 - exp(-a (r - r0)))^2 - 1 ] + C0 / r^12
+# !! Check every number below against the original paper before production runs !!
+name: Pedone 2006
+reference: "A. Pedone et al., J. Phys. Chem. B 110 (2006) 11780"
+
+# Partial charges (e). Every oxide must come out charge-neutral with these.
+charges:
+  O: -1.2
+  Si: 2.4
+  Al: 1.8
+  P: 3.0
+  Li: 0.6
+  Na: 0.6
+  K: 0.6
+  Mg: 1.2
+  Ca: 1.2
+  Sr: 1.2
+  Ba: 1.2
+  Zn: 1.2
+
+# LAMMPS commands. {sr_cut} and {coul_cut} are filled in from below.
+short_range_cutoff: 5.5    # Angstrom (value used by Pedone)
+coulomb_cutoff: 10.0       # Angstrom (real-space part of Ewald/PPPM)
+pair_style: "hybrid/overlay pedone {sr_cut} coul/long {coul_cut}"
+global_coeffs:
+  - "pair_coeff * * coul/long"
+pair_coeff: "pedone {0} {1} {2} {3}"   # filled with the four numbers listed per pair
+kspace_style: "pppm 1.0e-5"
+
+# Per-pair parameters: [D0 (eV), a (1/Angstrom), r0 (Angstrom), C0 (eV Angstrom^12)]
+pairs:
+  O-O:   [0.042395, 1.379316, 3.618701, 22.0]
+  Si-O:  [0.340554, 2.006700, 2.100000, 1.0]
+  Al-O:  [0.361581, 1.900442, 2.164818, 0.9]
+  P-O:   [0.831326, 2.585833, 1.800790, 1.0]
+  Li-O:  [0.001114, 3.429506, 2.681360, 1.0]
+  Na-O:  [0.023363, 1.763867, 3.006315, 5.0]
+  K-O:   [0.011558, 2.062723, 3.305923, 5.0]
+  Mg-O:  [0.038908, 2.281000, 2.586153, 5.0]
+  Ca-O:  [0.030211, 2.241334, 2.923245, 5.0]
+  Sr-O:  [0.019623, 1.886000, 3.328330, 3.0]
+  Ba-O:  [0.065171, 1.547596, 3.393410, 5.0]
+  Zn-O:  [0.001221, 3.150679, 2.851850, 1.0]

@@ -1,0 +1,91 @@
+# =====================================================================
+#  MASTER INPUT -- everything about the series is defined here.
+#  Run:  python pipeline.py master_input.yaml all
+# =====================================================================
+
+project:
+  name: lithium_silicates
+  output_dir: runs            # all results go here (relative to this file)
+  seed: 2026                  # master random seed (each run derives its own)
+
+# ---------------------------------------------------------------------
+# Compositional series. Two options; they can be combined.
+#  (a) 'series': oxide amounts as formulas in x, one run per value of x
+#  (b) 'list'  : explicitly given compositions
+# Oxide amounts are normalised, so mol% or mol fractions both work.
+# 'density' is only the STARTING density (g/cm3); NPT stages relax it.
+#  It can be one number or [[x, rho], ...] points that are interpolated.
+# ---------------------------------------------------------------------
+compositions:
+  series:
+    name: "LS_x{x:.2f}"       # run names, {x} is the series variable
+    label: "x in xLi2O-(1-x)SiO2"
+    values: [0.20, 0.25, 0.33, 0.40]
+    oxides:
+      Li2O: "x"
+      SiO2: "1 - x"
+    density: [[0.0, 2.20], [0.33, 2.35], [0.50, 2.33]]
+  # list:
+  #   - name: LS2_Al
+  #     oxides: {Li2O: 30, Al2O3: 5, SiO2: 65}
+  #     density: 2.38
+
+system:
+  target_atoms: 3000          # approximate; whole oxide units are used
+  min_distance: 1.6           # A, closest approach in the random start
+  replicas: 1                 # independent quenches per composition
+
+potential: potentials/pedone.yaml
+
+# ---------------------------------------------------------------------
+# LAMMPS execution
+# ---------------------------------------------------------------------
+lammps:
+  command: lmp                # name/path of the LAMMPS executable
+  mpi_ranks: 4
+  mpi_launcher: "mpirun -np {n}"
+  run_mode: local             # local | slurm | none
+  slurm:
+    submit: false             # true: call sbatch automatically
+    time: "24:00:00"
+    # partition: normal
+    # account: myproject
+    # extra_lines: ["module load lammps/2Aug2023"]
+
+# ---------------------------------------------------------------------
+# Thermal history: a list of stages, executed in order.
+# types: minimize | relax | equilibrate | ramp | production
+# ensembles: nvt | npt | nve ; temperatures in K, pressures in bar, times in ps
+# ---------------------------------------------------------------------
+simulation:
+  timestep_fs: 1.0
+  thermo_every: 1000
+  initial_T: 300
+  stages:
+    - {type: minimize}
+    - {type: relax, T: 300, time_ps: 5}                       # remove bad contacts
+    - {type: ramp, T_start: 300, T_end: 4000, rate_K_per_ps: 100, ensemble: nvt}
+    - {type: equilibrate, T: 4000, time_ps: 100, ensemble: nvt, name: melt}
+    - {type: ramp, T_start: 4000, T_end: 300, rate_K_per_ps: 1, ensemble: npt, P_bar: 0, name: quench}
+    - {type: equilibrate, T: 300, time_ps: 100, ensemble: npt, P_bar: 0, name: relax_300K}
+    - {type: production, T: 300, time_ps: 100, ensemble: nvt, dump_every_ps: 1}
+
+# ---------------------------------------------------------------------
+# Analysis of the production trajectory
+# ---------------------------------------------------------------------
+analysis:
+  r_max: 8.0                  # A, must be < half the box length
+  dr: 0.02
+  skip_frames: 0
+  q_max: 20.0                 # 1/A, neutron structure factor
+  coordination:
+    pairs: [Si-O, Li-O, O-Si, O-Li]     # centre-neighbour; default: all cation-O
+    cutoffs: {Si-O: 2.0}                # missing pairs: first minimum of g(r)
+  qn:
+    formers: [Si]
+  bond_angles: [O-Si-O, Si-O-Si]
+  msd: true
+  nmr_m2:                     # van Vleck second moments from the structure
+    - {observe: 7Li, partner: 7Li}
+    - {observe: 29Si, partner: 7Li}
+  isotope_table: ../IsotopeProperties
