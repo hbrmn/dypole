@@ -1,0 +1,20 @@
+cff-version: 1.2.0
+message: "If you use dypole, please cite the archived version you used (see the DOI on its Zenodo record)."
+title: "dypole: evaluation of solid-state NMR spin-echo decay, REDOR/RESPDOR and relaxation experiments"
+type: software
+version: 0.1.0
+date-released: 2026-11-24
+license: GPL-3.0-or-later
+repository-code: "https://github.com/hbrmn/dypole"
+authors:
+  - family-names: "Bradtmüller"
+    given-names: "Henrik"
+    email: henrik@usp.br
+    affiliation: "São Carlos Institute of Physics, University of São Paulo"
+keywords:
+  - solid-state NMR
+  - spin-echo decay
+  - dipolar second moment
+  - REDOR
+  - RESPDOR
+  - glass

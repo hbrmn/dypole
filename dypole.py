@@ -1,22 +1,24 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-''' Collection of functions to process multidimensional NMR datasets.
+''' dypole: evaluation of solid-state NMR dipolar and relaxation experiments.
+
+Reads Varian/Agilent and Bruker data with nmrglue, processes the FIDs and
+evaluates
+
+- spin-echo decay (SED): homonuclear dipolar second moment M2
+  (Dataset.sed_eval, sed_replicates, sed_stitch),
+- REDOR and RESPDOR: heteronuclear dipolar coupling (experimental),
+- T1, T1rho and SAE relaxation (experimental).
 
 Created on Wed Jan 22 14:31:16 2020
 
-@author: Henrik Bradtmüller - mail@bradtmueller.net - https://hbrmn.github.io/
+@author: Henrik Bradtmüller - henrik@usp.br - https://hbrmn.github.io/
 
 ToDo: Include parabolic approximation for WRESPDOR curves:
-    \Delta S / S_0 = 2/(3*\pi^2) M_2 (nTr)^2 - Anuraag Gaddam 2022
-
-Functions
----------
-process1d
-    Does something
-process2d
-    Does another thing
-
+    Delta S / S_0 = 2/(3*pi^2) M_2 (nTr)^2 - Anuraag Gaddam 2022
 '''
+
+__version__ = '0.1.0'
 
 import csv
 import os
@@ -93,15 +95,13 @@ class Dataset:
                                  int(aux[0][2]/2)))[0:self.dic['acqu2s']['TD'],:]
                 else:
                     self.rawdata = rawdata
+            else:
+                self.rawdata = rawdata
 
             if self.dic['acqus']['DIGMOD'] != 0:
                 # Removes the group delay artifact when recording digitally
                 self.rawdata = ng.bruker.remove_digital_filter(self.dic,
                                                                self.rawdata)
-                # Zero fills the number of omitted initial points to value 2^n
-                self.rawdata = ng.proc_base.zf(
-                    self.rawdata, (self.rawdata.shape[self.rawdata.ndim - 1]
-                                   - self.rawdata.shape[self.rawdata.ndim - 1]))
 
             self.car_freq = self.dic['acqus']['SFO1']
             self.spec_width = self.dic['acqus']['SW_h']
@@ -259,7 +259,8 @@ class Dataset:
             if self.lb is not False:
                 exp_lb = self.lb
             else:
-                exp_lb = int(input('Enter exponential line broadeing in Hz: '))
+                exp_lb = float(
+                    input('Enter exponential line broadening in Hz: '))
             # Calculates Line broadening (Topspin style) and
             # divides value by sw in Hz
             data = (
@@ -314,12 +315,10 @@ class Dataset:
         # def auto_phase(self, spec):
 
         # Begin data processing
-        try:
-            self.proc_data
-        except:
-            proc = 1
-        else:
+        if hasattr(self, 'proc_data'):
             proc = int(input('Re-process data?: 1 - yes, 2 - no: '))
+        else:
+            proc = 1
 
         if proc == 1:
             data = self.rawdata
@@ -396,12 +395,10 @@ class Dataset:
         '''
         self.process()
 
-        try:
-            self.area
-        except:
-            integrate = 1
-        else:
+        if hasattr(self, 'area'):
             integrate = int(input('Re-integrate data?: 1 - yes, 2 - no: '))
+        else:
+            integrate = 1
 
         if integrate == 1:
 
@@ -420,8 +417,9 @@ class Dataset:
 
             done = 0
             while done != 1:
-                x_low = int(input('Enter left bound for integration in ppm: '))
-                x_high = int(
+                x_low = float(
+                    input('Enter left bound for integration in ppm: '))
+                x_high = float(
                     input('Enter right bound for integration in ppm: '))
                 min_int = int(self.sfo_point - x_low / ppm_per_pt)
                 max_int = int(self.sfo_point - x_high / ppm_per_pt)
@@ -459,8 +457,8 @@ class Dataset:
     def export(self, xaxis, yaxis, xlab, ylab, data_type, result=None):
 
         exp_var = zip(xaxis, yaxis)
-        with open(self.path + '\\' + self.name + data_type
-                  + '.csv', 'w') as file:
+        with open(os.path.join(self.path, self.name + data_type + '.csv'),
+                  'w', newline='') as file:
             writer = csv.writer(file, delimiter='\t', lineterminator='\n')
             writer.writerow((xlab, ylab, result))
             for word in exp_var:
@@ -567,8 +565,38 @@ class Dataset:
                 tau2 = np.full(len(tau), tau2[0])
         return tau, tau2
 
+    def bruker_delays(self, filename='vdlist'):
+        '''Returns the delays of a Bruker variable-delay list in s.
+
+        The file is searched in self.path and, if self.path is a processed
+        data directory (.../pdata/1), in the experiment directory. Entries
+        without a unit are in s; the suffixes s, m (ms), u (us) and n (ns)
+        are understood.
+        '''
+        units = {'': 1.0, 's': 1.0, 'm': 1e-3, 'u': 1e-6, 'n': 1e-9}
+        folders = [self.path,
+                   os.path.dirname(os.path.dirname(
+                       os.path.normpath(self.path)))]
+        for folder in folders:
+            name = os.path.join(folder, filename)
+            if os.path.isfile(name):
+                delays = []
+                with open(name, encoding='utf-8', errors='replace') as file:
+                    for line in file:
+                        entry = re.fullmatch(
+                            r'\s*([-+0-9.eE]+)\s*([smun]?)\s*',
+                            line.split('#')[0])
+                        if entry:
+                            delays.append(float(entry.group(1))
+                                          * units[entry.group(2)])
+                return np.array(delays)
+        raise FileNotFoundError(
+            'No ' + filename + ' found in ' + self.path + ' or its '
+            + 'experiment directory: pass the delays explicitly.')
+
     def sed_eval(self, fid=False, export=False, fit_range=None,
-                 echo_start=4, echo_npts=10, echo_skip=2, echo_offset=None):
+                 echo_start=4, echo_npts=10, echo_skip=2, echo_offset=None,
+                 delays=None):
         '''Returns the homonuclear dipole-dipole second moment of a spin-echo
         decay experiment based in the FID intensities.
 
@@ -591,6 +619,9 @@ class Dataset:
         echo_offset : float, optional
             Echo-top position for fid='echo', see echo_int. Needed when the
             echo does not move through the acquisition window.
+        delays : array of float, optional
+            Echo delays tau in us. Read from t1Xecho for Varian data and from
+            the vdlist file for Bruker data if not given.
 
         Todo:
             Works only if rawdata contains FIDs - make sure if input is from
@@ -602,14 +633,13 @@ class Dataset:
         '''
         self.experiment = 'SED'
 
-        if self.vendor == 'varian':
+        if delays is not None:
+            vdlist = np.asarray(delays, dtype=float)
+        elif self.vendor == 'varian':
             vdlist = (np.array(
                 self.dic['procpar']['t1Xecho']['values']).astype(float))
-        if self.vendor == 'bruker':
-            vdlist = np.array([5, 10,	15,	20,	25,	30,	35,	40,	45,	50,	55,	60,	65,	70,	75,	80,	85,	90,	95,	100,	110,	120,	130,	140,	150,	160,	170,	180,	190,	200,	220,	240,	260,	280,	300,	350,	400,	450,	500,	550,	600,	650,	700,	800,	900,	1000,
-])
-#         vdlist = np.linspace(5, 100, 20)
-        # vdlist = vdlist
+        else:
+            vdlist = self.bruker_delays() * 1e6
 
         # time scale (2tau) in ms²
         time = (((vdlist*1e-3)*2)**2)
@@ -718,17 +748,28 @@ class Dataset:
 
             plt.xlabel(r'(2$\tau$)$^2$ / ms$^2$')
             plt.ylabel(r'ln(I / I$_{0}$)')
-            fig.savefig(self.path + '\\' + self.name + '_SED.png',
+            fig.savefig(os.path.join(self.path, self.name + '_SED.png'),
                         format='png', dpi=300, bbox_inches='tight')
         return second_moment
 
-    def t1_eval(self, fid=False, fit_lim=False):
-        '''
+    def t1_eval(self, fid=False, fit_lim=False, delays=None):
+        '''Fits a saturation-recovery T1 curve (stretched mono- or
+        bi-exponential, chosen at a prompt).
+
+        Parameters
+        ----------
+        fid : bool
+            True uses the FID maxima instead of the integrated spectra.
+        fit_lim : int
+            Number of points at the end that are left out.
+        delays : array of float, optional
+            Recovery delays in s. Read from d2 (Varian) or the vdlist file
+            (Bruker) if not given.
 
         Returns
         -------
-        None.
-
+        result : str
+            Fitted parameters.
         '''
 
         self.experiment = 'T1'
@@ -739,18 +780,22 @@ class Dataset:
             self.integrate()
             t1_int = self.area
 
-        if self.vendor == 'varian':
+        if delays is not None:
+            vdlist = np.asarray(delays, dtype=float)
+        elif self.vendor == 'varian':
             vdlist = (np.array(
                 self.dic['procpar']['d2']['values']).astype(float))
+        else:
+            vdlist = self.bruker_delays()
 
-        if fit_lim == False:
+        if not fit_lim:
             fit_lim = 0
 
         # time scale in s
         time = vdlist[0:len(t1_int)-fit_lim]
 
         # normalized intensities
-        t1_int = self.area/np.max(self.area)
+        t1_int = t1_int/np.max(t1_int)
         t1_int = t1_int[0:len(t1_int)-fit_lim]
 
         # Plot data
@@ -816,17 +861,28 @@ class Dataset:
         plt.xlabel(r'$t$ / s')
         plt.ylabel(r'I/I$_0$')
         # plt.axhline(y=1.0, color='k', linestyle='--')
-        fig.savefig(self.path + '\\' + self.name + '_T1.png',
+        fig.savefig(os.path.join(self.path, self.name + '_T1.png'),
                     format='png', dpi=300, bbox_inches='tight')
         return result
 
-    def t1rho_eval(self, fid=False, fit_lim=False):
-        '''
+    def t1rho_eval(self, fid=False, fit_lim=False, delays=None):
+        '''Fits a spin-lock decay exp(-(t * R1rho)^beta) and returns the rate
+        R1rho = 1/T1rho in s^-1 and beta.
+
+        Parameters
+        ----------
+        fid : bool
+            True uses the FID maxima instead of the integrated spectra.
+        fit_lim : int
+            Number of points at the end that are left out.
+        delays : array of float, optional
+            Spin-lock times in s. Read from d2 (Varian) or the vdlist file
+            (Bruker) if not given.
 
         Returns
         -------
-        None.
-
+        result : str
+            Fitted parameters.
         '''
 
         self.experiment = 'T1rho'
@@ -837,18 +893,19 @@ class Dataset:
             self.integrate()
             t1rho_int = self.area
 
-        if self.vendor == 'varian':
+        if delays is not None:
+            vdlist = np.asarray(delays, dtype=float)
+        elif self.vendor == 'varian':
             vdlist = (np.array(
                 self.dic['procpar']['d2']['values']).astype(float))
-        elif self.vendor == 'bruker':
-            vdlist = np.array([2000, 2700, 3700, 5000, 6800, 9300, 12600, 17200, 23000,
-                      31700, 43100, 58600, 79600, 108200, 147100, 200000]).astype(float)
+        else:
+            vdlist = self.bruker_delays()
 
-        if fit_lim == False:
+        if not fit_lim:
             fit_lim = 0
 
         # time scale in s
-        time = vdlist[0:len(t1rho_int)-fit_lim] * 1e-6
+        time = vdlist[0:len(t1rho_int)-fit_lim]
 
         # normalized intensities
         t1rho_int = t1rho_int/np.max(t1rho_int)
@@ -872,13 +929,133 @@ class Dataset:
         # Exporting data
 
         # Experimental data
-        self.export(time, t1rho_int, 'tau / s^-1', 'I', 'T1-Satrec')
+        self.export(time, t1rho_int, 'tau / s', 'I', 'T1rho')
         # Fit
         scale = np.round(np.linspace(time[0], time[-1], 1000),
                          decimals=4)
         fit = mono_exp_fit(scale, amp, T1, beta)
-        result = ('T1rho = ' + str(np.round(T1, decimals=4)) + ' s^-1, '
+        result = ('1/T1rho = ' + str(np.round(T1, decimals=4)) + ' s^-1, '
                   + 'beta = ' + str(np.round(beta, decimals=4)))
+
+
+        self.export(scale, fit, 'tau / s', 'I', 'Fit', result)
+
+        # Creating and saving T1rho plot
+        fig = plt.figure(figsize=(self.fig_width, self.fig_height))
+
+        plt.scatter(time, t1rho_int, color='w', edgecolors='k')
+        plt.plot(scale, fit,
+                 '--', color='k')
+
+        plt.xlabel(r'$t$ / s')
+        plt.ylabel(r'I/I$_0$')
+        plt.ylim(-0.05, 1.05)
+        # plt.axhline(y=1.0, color='k', linestyle='--')
+        fig.savefig(os.path.join(self.path, self.name + '_T1rho.png'),
+                    format='png', dpi=300, bbox_inches='tight')
+        return result
+
+    def sae_eval(self, fid=False, fit_lim=False):
+        '''Fits a spin-alignment echo (SAE) decay with a stretched
+        exponential (1) or a product of two stretched exponentials (2),
+        chosen at a prompt. Varian only: mixing times are read from tau2
+        (in us).
+
+        Parameters
+        ----------
+        fid : bool
+            True uses the FID maxima instead of the integrated spectra.
+        fit_lim : int
+            Number of points (from the start) used in the fit.
+
+        Returns
+        -------
+        result : str
+            Fitted parameters.
+        '''
+
+        self.experiment = 'SAE'
+
+        if fid:
+            sae_int = np.abs(self.rawdata).max(axis=1)
+        else:
+            self.integrate()
+            sae_int = self.area
+
+
+        if self.vendor != 'varian':
+            raise NotImplementedError('sae_eval reads the mixing times from '
+                                      'the Varian parameter tau2.')
+        vdlist = (np.array(
+            self.dic['procpar']['tau2']['values']).astype(float))
+
+        # time scale in s
+        time = vdlist*1e-6
+
+        if not fit_lim:
+            fit_lim = len(time)
+
+        fit_time = time[0:fit_lim]
+
+        # normalized intensities
+        sae_int = sae_int/sae_int[0]
+        fit_int = sae_int[0:fit_lim]
+
+        # Plot data
+        plt.scatter(time, sae_int, color = 'w', edgecolor = 'k')
+        plt.semilogx(time, sae_int, '--')
+        plt.show()
+
+        def mono_exp_fit(time, Tsae, beta):
+            return (np.exp(-(time*Tsae)**beta))  # saturation recovery
+
+        def Tsae_exp(time, A, Tsae, beta1, B):
+            return (A * np.exp(-(time*Tsae))**beta1 + B)
+
+        def T1sae_exp(time, T1sae, beta2):
+            return (np.exp(-(time*T1sae)**beta2))
+
+        def biexp_fit(time, A, Tsae, beta1, B, T1sae, beta2):
+            return (Tsae_exp(time, A, Tsae, beta1, B) * T1sae_exp(time, T1sae, beta2))
+
+        fit_type = int(input('Mono (1) or Bi (KWW) (2) exponential fit?: '))
+
+        if fit_type == 1:
+            [popt, _] = (opt.curve_fit(mono_exp_fit, fit_time, fit_int,
+                                       bounds=(np.array([0.1, 0.1]),
+                                               np.array([np.inf, 1]
+                                                        ))))
+            Tsae, beta = popt[0], popt[1]
+        elif fit_type == 2:
+            [popt, _] = (opt.curve_fit(biexp_fit, fit_time, fit_int,
+                                       p0=[0.8, 466, 0.99, 0.2, 80, 0.17],
+                                       bounds=(np.array([ 0, 0, 0, 0, 0, 0]),
+                                               np.array([1, np.inf, 1, 1, np.inf, 1]
+                                                        ))))
+            A, Tsae, beta1, B, T1sae, beta2 = popt[0], popt[1], popt[2], popt[3], popt[4], popt[5]
+            S_inf = B/(A+B)
+        # elif fit_type == 3:
+
+
+        # Exporting data
+
+
+
+        # Experimental data
+        self.export(time, sae_int, 'tau / s', 'I', 'SAE')
+        # Fit
+        scale = np.geomspace(time[0], time[-1], num=1000)
+        if fit_type == 1:
+            fit = mono_exp_fit(scale, Tsae, beta)
+            result = ('Tsae-1 = ' + str(np.round(Tsae, decimals=4)) + ' Hz, '
+                      + 'beta = ' + str(np.round(beta, decimals=4)))
+        else:
+            fit = biexp_fit(scale, A, Tsae, beta1, B, T1sae, beta2)
+            result = ('S_inf = ' + str(np.round(S_inf, decimals=4))
+                      + ', Tsae-1 = ' + str(np.round(Tsae, decimals=4)) + ' Hz, '
+                      + 'beta1 = ' + str(np.round(beta1, decimals=4))
+                      + ', T1sae-1 = ' + str(np.round(T1sae, decimals=4)) + ' Hz, '
+                      + 'beta2 = ' + str(np.round(beta2, decimals=4)))
 
 
         self.export(scale, fit, 'tau / s', 'I', 'Fit', result)
@@ -886,149 +1063,50 @@ class Dataset:
         # Creating and saving T1 plot
         fig = plt.figure(figsize=(self.fig_width, self.fig_height))
 
-        plt.scatter(time, t1rho_int, color='w', edgecolors='k')
-        plt.plot(scale, fit,
-                 '--', color='k')
+        plt.scatter(time, sae_int, color = 'w', edgecolor = 'k')
+        plt.semilogx(scale, fit, '-', color='k')
 
-        plt.xlabel(r'$t$ / ms')
-        plt.ylabel(r'I/I$_0$')
-        plt.ylim(-0.05, 1.05)
-        # plt.axhline(y=1.0, color='k', linestyle='--')
-        fig.savefig(self.path + '\\' + self.name + '_T1rho.png',
+        y_min = sae_int[-1]*0.5
+
+        if fit_type == 2:
+            plt.loglog(scale, (Tsae_exp(scale, A, Tsae, beta1, 0)
+                               * T1sae_exp(scale, T1sae, beta2)) + y_min, '--', color='g')
+            plt.loglog(scale, (T1sae_exp(scale, T1sae, beta2) * B), '--', color='m')
+
+        if fit_type == 1:
+            plt.ylim(y_min*0.9, 1.1)
+        else:
+            plt.ylim(y_min*0.9, 1.2)
+        # plt.xlim(1e-6, 100)
+        plt.xlabel(r'mixing time $t_m$ / s')
+        plt.ylabel(r'$S_2$ ($t_p$, $t_m$) / a.u.')
+        fig.savefig(os.path.join(self.path, self.name + '_SAE.png'),
                     format='png', dpi=300, bbox_inches='tight')
+
         return result
 
-    def sae_eval(self, fid=False, fit_lim=False):
-         '''
-
-         Returns
-         -------
-         None.
-
-         '''
-
-         self.experiment = 'SAE'
-
-         if fid:
-             sae_int = np.abs(self.rawdata).max(axis=1)
-         else:
-             self.integrate()
-             sae_int = self.area
-
-
-         if self.vendor == 'varian':
-             vdlist = (np.array(
-                 self.dic['procpar']['tau2']['values']).astype(float))
-
-         # time scale in s
-         time = vdlist*1e-6
-
-         if fit_lim == False:
-             fit_lim = len(time)
-
-         fit_time = time[0:fit_lim]
-
-         # normalized intensities
-         sae_int = sae_int/sae_int[0]
-         fit_int = sae_int[0:fit_lim]
-
-         # Plot data
-         plt.scatter(time, sae_int, color = 'w', edgecolor = 'k')
-         plt.semilogx(time, sae_int, '--')
-         plt.show()
-
-         def mono_exp_fit(time, Tsae, beta):
-             return (np.exp(-(time*Tsae)**beta))  # saturation recovery
-
-         def Tsae_exp(time, A, Tsae, beta1, B):
-             return (A * np.exp(-(time*Tsae))**beta1 + B)
-
-         def T1sae_exp(time, T1sae, beta2):
-             return (np.exp(-(time*T1sae)**beta2))
-
-         def biexp_fit(time, A, Tsae, beta1, B, T1sae, beta2):
-             return (Tsae_exp(time, A, Tsae, beta1, B) * T1sae_exp(time, T1sae, beta2))
-
-         fit_type = int(input('Mono (1) or Bi (KWW) (2) exponential fit?: '))
-
-         if fit_type == 1:
-             [popt, _] = (opt.curve_fit(mono_exp_fit, fit_time, fit_int,
-                                        bounds=(np.array([0.1, 0.1]),
-                                                np.array([np.inf, 1]
-                                                         ))))
-             Tsae, beta = popt[0], popt[1]
-         elif fit_type == 2:
-             [popt, _] = (opt.curve_fit(biexp_fit, fit_time, fit_int,
-                                        p0=[0.8, 466, 0.99, 0.2, 80, 0.17],
-                                        bounds=(np.array([ 0, 0, 0, 0, 0, 0]),
-                                                np.array([1, np.inf, 1, 1, np.inf, 1]
-                                                         ))))
-             A, Tsae, beta1, B, T1sae, beta2 = popt[0], popt[1], popt[2], popt[3], popt[4], popt[5]
-             S_inf = B/(A+B)
-         # elif fit_type == 3:
-
-
-         # Exporting data
-
-
-
-         # Experimental data
-         self.export(time, sae_int, 'tau / s', 'I', 'SAE')
-         # Fit
-         scale = np.geomspace(time[0], time[-1], num=1000)
-         if fit_type == 1:
-             fit = mono_exp_fit(scale, Tsae, beta)
-             result = ('Tsae-1 = ' + str(np.round(Tsae, decimals=4)) + ' Hz, '
-                       + 'beta = ' + str(np.round(beta, decimals=4)))
-         else:
-             fit = biexp_fit(scale, A, Tsae, beta1, B, T1sae, beta2)
-             result = ('S_inf = ' + str(np.round(S_inf, decimals=4))
-                       + ', T1sae-1 = ' + str(np.round(Tsae, decimals=4)) + ' Hz, '
-                       + 'beta1 = ' + str(np.round(beta1, decimals=4))
-                       + ', T1sae-1 = ' + str(np.round(T1sae, decimals=4)) + ' Hz, '
-                       + 'beta2 = ' + str(np.round(beta2, decimals=4)))
-
-
-         self.export(scale, fit, 'tau / s', 'I', 'Fit', result)
-
-         # Creating and saving T1 plot
-         fig = plt.figure(figsize=(self.fig_width, self.fig_height))
-
-         plt.scatter(time, sae_int, color = 'w', edgecolor = 'k')
-         plt.semilogx(scale, fit, '-', color='k')
-
-         y_min = sae_int[-1]*0.5
-
-         if fit_type == 2:
-             plt.loglog(scale, (Tsae_exp(scale, A, Tsae, beta1, 0)
-                                * T1sae_exp(scale, T1sae, beta2)) + y_min, '--', color='g')
-             plt.loglog(scale, (T1sae_exp(scale, T1sae, beta2) * B), '--', color='m')
-
-         if fit_type == 1:
-             plt.ylim(y_min*0.9, 1.1)
-         else:
-             plt.ylim(y_min*0.9, 1.2)
-         # plt.xlim(1e-6, 100)
-         plt.xlabel(r'mixing time $t_m$ / s')
-         plt.ylabel(r'$S_2$ ($t_p$, $t_m$) / a.u.')
-         fig.savefig(self.path + '\\' + self.name + '_SAE.png',
-                     format='png', dpi=300, bbox_inches='tight')
-
-         return result
-
-    def respdor_eval(self, spin=False, fit_lim=False):
-        """Returns the heterodipolar second moment value of a RESPDOR experiment
-        and exports the deltaS/S0 data set together with a fitted bessel function.
+    def respdor_eval(self, spin=None, fit_lim=None):
+        """Returns the heteronuclear dipolar coupling constant of a
+        RESPDOR experiment from a fit of the Bessel-function expression of
+        Goldbourt et al. (doi: 10.1016/j.ssnmr.2018.04.001) and exports the
+        Delta S/S0 data set with the fit. Experimental.
 
         Parameters
         ----------
+        spin : float
+            Spin quantum number of the non-observed (saturated) nucleus.
+        fit_lim : int, optional
+            Number of points (from the start, including the origin) used in
+            the fit. All points if not given.
 
         Returns
         -------
-        TYPE
-            DESCRIPTION.
-
+        float
+            Dipolar coupling constant in Hz.
         """
+        if not spin:
+            raise ValueError('Give the spin quantum number of the '
+                             'non-observed nucleus, e.g. spin=9/2.')
         self.experiment = 'RESPDOR'
 
         self.fit_lim = fit_lim
@@ -1056,8 +1134,7 @@ class Dataset:
                                 decimals=2))
         respdor_ntr = np.insert(respdor_ntr, 0, 1e-10)
 
-        # fit_max = np.where(respdor_int > fit_lim)
-        fit_max = fit_lim
+        fit_max = fit_lim if fit_lim else None
 
         # Bessel function bastidores
 
@@ -1111,7 +1188,7 @@ class Dataset:
 
         result = ('dip_const = ' + str(np.round(dipole_const, decimals=4)) + ' Hz')
 
-        self.export(scale, fit, 'NTr / ms', 'DS/S0', 'Fit', result)
+        self.export(scale, fit, 'nTr / ms', 'DS/S0', 'Fit', result)
 
         # Creating and saving RESPDOR plot
         fig = plt.figure(figsize=(self.fig_width, self.fig_height))
@@ -1123,24 +1200,32 @@ class Dataset:
         plt.xlabel(r'$nTr$ / ms')
         plt.ylabel(r'$\Delta$ S / S$_0$')
         plt.ylim(-0.05, 1.2)
-        fig.savefig(self.path + '\\' + self.name + '_RESPDOR.png',
+        fig.savefig(os.path.join(self.path, self.name + '_RESPDOR.png'),
                     format='png', dpi=300, bbox_inches='tight')
 
         return dipole_const[0]
 
-    def redor_eval(self, spin=False, fit_lim=False):
-        """Returns the heterodipolar second moment value of a REDOR experiment
-        and exports the deltaS/S0 data set together with a quadratic fit.
+    def redor_eval(self, spin=None, fit_lim=0.2):
+        """Returns the heteronuclear dipolar second moment of a REDOR
+        experiment from a quadratic fit of the initial Delta S/S0 curve and
+        exports the data set with the fit. Experimental.
 
         Parameters
         ----------
+        spin : float
+            Spin quantum number of the non-observed nucleus.
+        fit_lim : float
+            Only the points before the first one with Delta S/S0 > fit_lim
+            are fitted (default 0.2).
 
         Returns
         -------
-        TYPE
-            DESCRIPTION.
-
+        float
+            Second moment in 1e6 rad^2/s^2.
         """
+        if not spin:
+            raise ValueError('Give the spin quantum number of the '
+                             'non-observed nucleus, e.g. spin=1/2.')
         self.experiment = 'REDOR'
 
         self.fit_lim = fit_lim
@@ -1169,7 +1254,8 @@ class Dataset:
                                 decimals=3))
         redor_ntr = np.insert(redor_ntr, 0, 0)
 
-        fit_max = np.where(redor_int > fit_lim)
+        above = np.where(redor_int > fit_lim)[0]
+        fit_max = above[0] if len(above) else len(redor_int)
 
         # REDOR analysis via quadratic function,
         # typically within dS/S0 regime < 0.2 for glasses
@@ -1181,8 +1267,8 @@ class Dataset:
         x0 = 10000
         # sigma = np.ones(fit_max[0][0]) # Std. deviation of y-data
         [res1, res2] = (opt.curve_fit(quad_func,
-                                      redor_ntr[0:fit_max[0][0]],
-                                      redor_int[0:fit_max[0][0]], x0))
+                                      redor_ntr[0:fit_max],
+                                      redor_int[0:fit_max], x0))
 
         # Since redor_ntr is in ms, the M2 unit is 1e6 rad²s-²
         second_moment = (res1*(spin*(spin+1)*(np.pi**2)))
@@ -1195,9 +1281,9 @@ class Dataset:
         fit = quad_func(scale, res1)
 
         result = ('M2 = ' + str(np.round(second_moment, decimals=4))
-                  + ' rad^2 s^-2')
+                  + ' e6 rad^2 s^-2')
 
-        self.export(scale, fit, '$NT_r$ / ms', 'DS/S0', 'Fit', result)
+        self.export(scale, fit, 'nTr / ms', 'DS/S0', 'Fit', result)
 
         # Creating and saving REDOR plot
         fig = plt.figure(figsize=(self.fig_width, self.fig_height))
@@ -1208,7 +1294,7 @@ class Dataset:
         plt.xlabel(r'$nT_r$ / ms')
         plt.ylabel(r'$\Delta$S / S$_0$')
         plt.ylim(-0.05, 1.2)
-        fig.savefig(self.path + '\\' + self.name + '_REDOR.png',
+        fig.savefig(os.path.join(self.path, self.name + '_REDOR.png'),
                     format='png', dpi=300, bbox_inches='tight')
 
         return second_moment
@@ -1439,60 +1525,3 @@ def sed_stitch(paths, ref_tau=20, offset=None, start=4, npts=10, skip=2,
         print('Compressed exponential: T = ' + str(np.round(result['T'], 4))
               + ' ms, beta = ' + str(np.round(result['beta'], 4)))
     return result
-
-
-#----------------------------------------------------------------------------#
-
-# SED
-# Echo-aligned integration, recommended when the FIDs start before or on
-# the echo top:
-# M2 = nmr_data.sed_eval(fid='echo', export='zoom')
-# Repeated measurements of one sample, with error bars:
-# result = sed_replicates(glob.glob(r'C:\path\to\data\*precursor*.fid'))
-# Series with different tau lists (all containing tau = 20 us) of one sample,
-# stitched into one decay curve:
-# curve = sed_stitch(glob.glob(r'C:\path\to\data\*precursor*.fid'))
-# Path = (r"C:\Users\edwu5ea1\data_work\Projects\1-LNS-crystallization\7Li\Glass-Ceramics\20230828-7Li-x15-70min-SED3.fid")
-
-# # # #         # + r'\210722-7Li-LS2-cryst_SEDLT.fid')
-# nmr_data = Dataset(Path, 'x-15-0min', 'varian')
-# new_int = np.loadtxt(r'C:\Users\edwu5ea1\data_work\Projects\1-LNS-crystallization\7Li\Glass-Ceramics\0min\area.txt')
-# nmr_data.custom_int = new_int
-# M2 = nmr_data.sed_eval(export='zoom', fid=True)
-# Fix that if predefined values are used it doesn't show the dialog for the other functions 4, 0.1, 4, 500
-
-# result = Dataset.respdor_eval(nmr_data, spin = 9/2, fit_lim = 2)
-# result  = nmr_data.sae_eval()
-
-# SAE
-# Path = (r"C:\Users\HB\data_work\Projects\1_Crystallization_I\LS2\7Li_SAE\20220503-7Li-LS2-cryst-SAE.fid")
-# nmr_data = Dataset(Path, 'cryst-mono', 'varian')
-# result  = nmr_data.sae_eval(fid=True, fit_lim=7)
-
-# # REDOR
-# Path = (r"C:\Users\edwu5ea1\NMR Data\nmr\31P-93Nb-RESPDOR\18\pdata\1")
-# nmr_data = Dataset(Path, 'NbPO5', 'bruker')
-# # nmr_data = Dataset(Path, 'PZAB_AL6', 'bruker')
-# result  = nmr_data.redor_eval(spin = 1/2, fit_lim = 0.2)
-
-# RESPDOR
-Path = (r"C:\Users\edwu5ea1\NMR Data\nmr\7Li-93Nb-LNS\21\pdata\1")
-nmr_data = Dataset(Path, 'LiNbO3', 'bruker', 4, 0.5, 4, 50)
-# new_area = np.loadtxt(r'C:\Users\edwu5ea1\data_work\600MHz SC\nmr\7Li-93Nb-LNS\3\pdata\1\area.txt')
-# nmr_data.area = new_area
-# nmr_data.dic['acqu2s']['TD'] = 28
-result  = nmr_data.respdor_eval(spin = 9/2, fit_lim = 3)
-
-# T1
-# Path = (r"C:\Users\HB\data_work\Projects\1_Crystallization_I\LS2\7Li_Satrec\220602-7Li-LS2-25d_Satrec-static")
-# nmr_data = Dataset(Path, '10d-biexp', 'varian', 4, 1, 4, 100)
-# test_var = nmr_data.t1_eval()
-
-# T1rho
-# Path = (r"C:\Users\HB\sciebo\data\NMR Data Bruker\600MHz SC\nmr\7Li_LS2-spinlock\18\pdata\1")
-# nmr_data = Dataset(Path, '60dFokin_10kHz', 'bruker')
-# test_var = nmr_data.t1rho_eval(fid=True)
-
-# if __name__ == '__main__':
-
-

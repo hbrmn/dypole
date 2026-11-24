@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dypole"
+version = "0.1.0"
+description = "Evaluation of solid-state NMR spin-echo decay, REDOR/RESPDOR and relaxation experiments"
+readme = "README.md"
+license = { text = "GPL-3.0-or-later" }
+authors = [{ name = "Henrik Bradtmüller", email = "henrik@usp.br" }]
+requires-python = ">=3.8"
+dependencies = [
+    "numpy",
+    "scipy",
+    "matplotlib",
+    "nmrglue",
+    "palettable",
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+    "Topic :: Scientific/Engineering :: Physics",
+    "Development Status :: 3 - Alpha",
+]
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[project.urls]
+Homepage = "https://github.com/hbrmn/dypole"
+
+[tool.setuptools]
+py-modules = ["dypole"]
