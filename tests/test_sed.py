@@ -78,6 +78,20 @@ def test_explicit_delays_match_procpar(tmp_path):
     assert m2 == pytest.approx(m2_delays)
 
 
+def test_frequency_axis_matches_spectrum(tmp_path, monkeypatch):
+    # trim=0.45 and zf=2 give 114 points, for which a floating-point
+    # arange of the frequency axis used to return 115
+    path = synthetic.moving_series(str(tmp_path / 'f.fid'))
+    answers = iter(['3', '2', '300', '-300', '1'])
+    monkeypatch.setattr('builtins.input', lambda prompt='': next(answers))
+    data = dypole.Dataset(path, 'f', 'varian', ls='auto-smooth2',
+                          trim=0.45, zf=2, lb=100)
+    m2 = data.sed_eval(fit_range=(0, 8))
+    assert len(data.freq_scale) == data.spec.shape[-1] == 114
+    assert len(data.ppm_scale) == data.spec.shape[-1]
+    assert np.isfinite(m2)
+
+
 def test_bruker_vdlist(tmp_path):
     expdir = tmp_path / '18'
     (expdir / 'pdata' / '1').mkdir(parents=True)

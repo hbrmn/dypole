@@ -334,11 +334,12 @@ class Dataset:
 
             length = data.shape[data.ndim - 1]
 
-            # Create frequency axis
+            # Create frequency axis; with a floating-point step arange can
+            # return one point too many, so cut it to the spectrum length
             self.freq_scale = (
                 (np.arange((self.spec_width/2) + self.rel_off_freq,
                            - self.spec_width/2 + self.rel_off_freq,
-                           - self.spec_width/length)))
+                           - self.spec_width/length)))[:length]
 
             # Create ppm axis
             self.ppm_scale = self.freq_scale/self.car_freq
