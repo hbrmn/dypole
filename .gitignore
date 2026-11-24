@@ -1,0 +1,11 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.pylint.d/
+.spyproject/
+.ipynb_checkpoints/
+*.sync-conflict-*
+.DS_Store
