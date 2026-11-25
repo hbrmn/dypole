@@ -19,14 +19,36 @@ archived version you used (see [Citing](#citing)).
 
 ## Installation
 
-Python 3.8 or newer. From a clone of this repository:
+Python 3.8 or newer. dypole is not on PyPI, so `pip install dypole` does not
+work; install it from GitHub instead.
+
+A released version, e.g. 0.1.0 (recommended for reproducing published
+results):
 
 ```
+pip install git+https://github.com/hbrmn/dypole@v0.1.0
+```
+
+The latest development version:
+
+```
+pip install git+https://github.com/hbrmn/dypole
+```
+
+From a local copy, e.g. to modify the code or run the tests (`.` is the
+repository folder):
+
+```
+git clone https://github.com/hbrmn/dypole
+cd dypole
 pip install .
 ```
 
-or install only the dependencies (`pip install -r requirements.txt`) and keep
-`dypole.py` next to your scripts.
+Without installing: `pip install -r requirements.txt` and keep `dypole.py`
+next to your scripts.
+
+After installing, use it with `import dypole`; `dypole.__version__` shows the
+installed version.
 
 ## Spin-echo decay (SED)
 
