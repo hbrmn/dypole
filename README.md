@@ -1,5 +1,7 @@
 # dypole
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.24518460.svg)](https://doi.org/10.5281/zenodo.24518460)
+
 Python tools for evaluating solid-state NMR experiments that probe dipolar
 couplings and relaxation, mainly in glasses. dypole reads Varian/Agilent and
 Bruker data with [nmrglue](https://www.nmrglue.com/), processes the FIDs and
@@ -118,7 +120,7 @@ are unchanged from the version used before the 0.1.0 cleanup.
 Each release is archived on Zenodo with its own DOI. Please cite the version
 you used, e.g.
 
-> H. Bradtmüller, dypole, version 0.1.0 (2026), Zenodo, https://doi.org/10.5281/zenodo.XXXXXXX
+> H. Bradtmüller, dypole, version 0.1.0 (2026), Zenodo, https://doi.org/10.5281/zenodo.24518460
 
 GitHub's "Cite this repository" button gives the same information from
 [`CITATION.cff`](CITATION.cff).
