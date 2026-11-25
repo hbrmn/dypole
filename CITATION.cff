@@ -5,6 +5,11 @@ type: software
 version: 0.1.0
 date-released: 2026-11-24
 license: GPL-3.0-or-later
+doi: "10.5281/zenodo.24518460"
+identifiers:
+  - type: doi
+    value: "10.5281/zenodo.24518460"
+    description: "Zenodo archive of dypole 0.1.0"
 repository-code: "https://github.com/hbrmn/dypole"
 authors:
   - family-names: "Bradtmüller"
